@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Secrets — never commit
+.env
+confidential.txt
+
+# Data files — contain personal information, do not commit
+data/
+
+# Streamlit cache
+.streamlit/
+
+# Temp chart files
+*.json
+!tool_schemas.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
