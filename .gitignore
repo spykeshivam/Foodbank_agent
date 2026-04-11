@@ -16,9 +16,7 @@ data/
 # Streamlit cache
 .streamlit/
 
-# Temp chart files
-*.json
-!tool_schemas.py
+
 
 # OS
 .DS_Store
