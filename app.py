@@ -8,6 +8,7 @@ import streamlit as st
 from google import genai
 from google.genai import types
 
+from sheets import fetch_registrations, fetch_logins
 from tool_schemas import TOOL_SCHEMAS
 from tools import TOOL_FUNCTIONS, init_datasets
 
@@ -19,17 +20,10 @@ st.set_page_config(
 )
 
 # ── Load data ─────────────────────────────────────────────────────────────────
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-
-
-@st.cache_data
+@st.cache_data(ttl=300)
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
-    registrations = pd.read_excel(
-        os.path.join(DATA_DIR, "Registration Form (Responses).xlsx")
-    )
-    logins = pd.read_excel(
-        os.path.join(DATA_DIR, "Log In (Responses).xlsx")
-    )
+    registrations = pd.DataFrame(fetch_registrations())
+    logins = pd.DataFrame(fetch_logins())
     return registrations, logins
 
 
