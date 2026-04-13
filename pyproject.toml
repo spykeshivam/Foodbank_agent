@@ -1,0 +1,18 @@
+[project]
+name = "foodbank-agent"
+version = "0.1.0"
+description = "AI chat interface for foodbank admins"
+requires-python = ">=3.11"
+dependencies = [
+    "streamlit>=1.35.0",
+    "google-genai>=1.0.0",
+    "pandas>=2.2.0",
+    "plotly>=5.22.0",
+    "openpyxl>=3.1.2",
+    "python-dateutil>=2.9.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]

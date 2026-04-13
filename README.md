@@ -37,40 +37,42 @@ Foodbank_agent/
 
 ### 1. Prerequisites
 
-- Python 3.11 or higher — download from https://www.python.org/downloads/
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) — fast Python package manager
 - Git — download from https://git-scm.com
 
-Check your versions:
+Install uv (one-time):
+```powershell
+# Windows PowerShell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
-python --version
-git --version
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 ### 2. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_ORG/foodbank-agent.git
-cd foodbank-agent
+git clone https://github.com/spykeshivam/Foodbank_agent.git
+cd Foodbank_agent
 ```
 
-### 3. Create and activate a virtual environment (recommended)
+### 3. Install dependencies and run
 
-Windows PowerShell:
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-macOS / Linux:
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-### 4. Install dependencies
+uv handles the virtual environment automatically — no manual `venv` step needed:
 
 ```bash
-pip install -r requirements.txt
+uv sync
+```
+
+To run the app:
+```bash
+uv run streamlit run app.py
+```
+
+To run the tests:
+```bash
+uv run pytest tests/ -v
 ```
 
 ### 5. Get a Gemini API key (free)
@@ -154,6 +156,7 @@ Expected output: **78 passed**
 | Charts | Plotly |
 | Excel reading | openpyxl |
 | Tests | pytest |
+| Package manager | uv |
 
 ---
 
@@ -166,7 +169,7 @@ Expected output: **78 passed**
 → Make sure both files are inside a `data/` folder in the project root with the exact filenames listed above.
 
 **`ModuleNotFoundError: No module named 'google.genai'`**
-→ Run `pip install -r requirements.txt` inside your virtual environment.
+→ Run `uv sync` to install all dependencies.
 
 **Pylance shows "Import google.genai could not be resolved" in VS Code**
 → Press `Ctrl+Shift+P` → "Python: Select Interpreter" → choose the Python from your `.venv` folder.
