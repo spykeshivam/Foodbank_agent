@@ -20,8 +20,8 @@ def fetch_sheet_data(sheet_id: str, worksheet_name: str) -> list[dict]:
 
 
 def fetch_registrations() -> list[dict]:
-    return fetch_sheet_data(SHEET_ID, "Registrations")
+    return fetch_sheet_data(SHEET_ID, "Form Responses 1")
 
 
 def fetch_logins() -> list[dict]:
-    return fetch_sheet_data(LOGIN_SHEET_ID, "Logins")
+    return fetch_sheet_data(LOGIN_SHEET_ID, "Form Responses 1")
