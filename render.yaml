@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: foodbank-agent
+    runtime: python
+    buildCommand: pip install uv && uv sync --frozen
+    startCommand: uv run streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false          # set manually in Render dashboard
+      - key: GOOGLE_CREDENTIALS_B64
+        sync: false          # base64-encoded contents of credentials.json
+      - key: SHEET_ID
+        sync: false          # registrations spreadsheet ID
+      - key: LOGIN_SHEET_ID
+        sync: false          # logins spreadsheet ID
+      - key: PYTHON_VERSION
+        value: "3.11"
