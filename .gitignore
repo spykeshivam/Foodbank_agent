@@ -18,8 +18,8 @@ config.py
 # Data files — contain personal information, do not commit
 data/
 
-# Streamlit cache
-.streamlit/
+# Streamlit — commit config, ignore cache
+.streamlit/cache/
 
 
 

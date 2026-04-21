@@ -2,8 +2,7 @@
 import json
 import re
 import tempfile
-import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import StringIO
 from dateutil.relativedelta import relativedelta
 
@@ -159,6 +158,23 @@ def group_and_count(
 
 
 # ── 6. create_bar_chart ──────────────────────────────────────────────────────
+_DARK_COLORS = [
+    "#E86B3A", "#4CC9F0", "#7BED9F", "#FFC06E",
+    "#A78BFA", "#F472B6", "#34D399", "#60A5FA",
+]
+
+_CHART_LAYOUT = dict(
+    template="plotly_dark",
+    paper_bgcolor="#1A1D27",
+    plot_bgcolor="#1A1D27",
+    font_color="#FAFAFA",
+    title_font_color="#FAFAFA",
+    legend=dict(bgcolor="rgba(0,0,0,0)"),
+    margin=dict(t=50, l=10, r=10, b=10),
+    colorway=_DARK_COLORS,
+)
+
+
 def create_bar_chart(
     data_json: str,
     x: str,
@@ -168,8 +184,12 @@ def create_bar_chart(
     barmode: str = "group",
 ) -> str:
     df = pd.read_json(StringIO(data_json), orient="records")
-    fig = px.bar(df, x=x, y=y, color=color, title=title, barmode=barmode)
-    fig.update_layout(plot_bgcolor="white", paper_bgcolor="white")
+    fig = px.bar(
+        df, x=x, y=y, color=color, title=title, barmode=barmode,
+        template="plotly_dark", color_discrete_sequence=_DARK_COLORS,
+    )
+    fig.update_layout(**_CHART_LAYOUT)
+    fig.update_traces(marker_line_width=0)
     return _save_chart(fig)
 
 
@@ -182,8 +202,12 @@ def create_line_chart(
     title: str = "",
 ) -> str:
     df = pd.read_json(StringIO(data_json), orient="records")
-    fig = px.line(df, x=x, y=y, color=color, title=title, markers=True)
-    fig.update_layout(plot_bgcolor="white", paper_bgcolor="white")
+    fig = px.line(
+        df, x=x, y=y, color=color, title=title, markers=True,
+        template="plotly_dark", color_discrete_sequence=_DARK_COLORS,
+    )
+    fig.update_layout(**_CHART_LAYOUT)
+    fig.update_traces(line_width=2.5, marker_size=7)
     return _save_chart(fig)
 
 
@@ -195,7 +219,12 @@ def create_pie_chart(
     title: str = "",
 ) -> str:
     df = pd.read_json(StringIO(data_json), orient="records")
-    fig = px.pie(df, names=names, values=values, title=title, hole=0.3)
+    fig = px.pie(
+        df, names=names, values=values, title=title, hole=0.35,
+        template="plotly_dark", color_discrete_sequence=_DARK_COLORS,
+    )
+    fig.update_layout(**_CHART_LAYOUT)
+    fig.update_traces(textfont_color="#FAFAFA", pull=0.02)
     return _save_chart(fig)
 
 
