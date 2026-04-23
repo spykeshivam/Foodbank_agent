@@ -9,6 +9,10 @@ from dateutil.relativedelta import relativedelta
 import pandas as pd
 import plotly.express as px
 
+from log_config import get_logger
+
+log = get_logger(__name__)
+
 # ── Global state shared with app.py ──────────────────────────────────────────
 _datasets: dict[str, pd.DataFrame] = {}
 
@@ -24,6 +28,11 @@ def init_datasets(registrations: pd.DataFrame, logins: pd.DataFrame) -> None:
     # Ensure registrations Timestamp is datetime
     _datasets["registrations"]["Timestamp"] = pd.to_datetime(
         _datasets["registrations"]["Timestamp"], format="mixed", dayfirst=False
+    )
+    log.info(
+        "Datasets loaded — registrations: %d rows, logins: %d rows",
+        len(_datasets["registrations"]),
+        len(_datasets["logins"]),
     )
 
 
@@ -74,19 +83,23 @@ def clarify_question(question: str) -> str:
 # ── 2. filter_registrations ──────────────────────────────────────────────────
 def filter_registrations(filters: dict) -> str:
     df = _get("registrations")
+    before = len(df)
     df = _apply_filters(df, filters)
     _datasets["filtered_registrations"] = df
+    log.info("filter_registrations | filters=%s | %d → %d rows", filters, before, len(df))
     return _df_summary(df, "filtered_registrations")
 
 
 # ── 3. filter_logins ─────────────────────────────────────────────────────────
 def filter_logins(filters: dict, months_back: int | None = None) -> str:
     df = _get("logins")
+    before = len(df)
     cutoff = _months_back_cutoff(months_back)
     if cutoff is not None:
         df = df[df["Timestamp"] >= cutoff]
     df = _apply_filters(df, filters)
     _datasets["filtered_logins"] = df
+    log.info("filter_logins | filters=%s, months_back=%s | %d → %d rows", filters, months_back, before, len(df))
     return _df_summary(df, "filtered_logins")
 
 
@@ -111,6 +124,7 @@ def join_sheets(
     if "Timestamp_login" in joined.columns:
         joined["Timestamp"] = joined["Timestamp_login"]
     _datasets["joined"] = joined
+    log.info("join_sheets | login_filters=%s, reg_filters=%s, months_back=%s | %d rows joined", login_filters, registration_filters, months_back, len(joined))
     return _df_summary(joined, "joined")
 
 
@@ -150,6 +164,7 @@ def group_and_count(
     result_key = f"grouped_{'_'.join(processed_group_by)}"
     _datasets[result_key] = grouped
 
+    log.info("group_and_count | dataset=%s, group_by=%s, months_back=%s | %d groups", dataset, processed_group_by, months_back, len(grouped))
     return json.dumps({
         "dataset_key": result_key,
         "row_count": len(grouped),

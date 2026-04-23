@@ -3,9 +3,13 @@ import pandas as pd
 import plotly.io as pio
 import streamlit as st
 
-from agent import AgentResponse, run_query
+from agent import AgentResponse, continue_after_clarification, run_query
+from log_config import get_logger, setup_logging
 from sheets import fetch_logins, fetch_registrations
 from tools import init_datasets
+
+setup_logging()
+log = get_logger(__name__)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -24,6 +28,7 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 registrations_df, logins_df = load_data()
 init_datasets(registrations_df, logins_df)
+log.info("App started — registrations: %d rows, logins: %d rows", len(registrations_df), len(logins_df))
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
@@ -31,7 +36,7 @@ if "messages" not in st.session_state:
 if "api_history" not in st.session_state:
     st.session_state.api_history = []       # Gemini Content objects
 if "pending_clarification" not in st.session_state:
-    st.session_state.pending_clarification = None   # clarification question str
+    st.session_state.pending_clarification = None   # paused AgentResponse or None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,8 +61,9 @@ def render_message(role: str, content) -> None:
 
 
 def handle_response(result: AgentResponse) -> None:
+    st.session_state.api_history = result.history   # persist multi-turn context
     if result.clarification_question:
-        st.session_state.pending_clarification = result.clarification_question
+        st.session_state.pending_clarification = result   # store full paused state
         st.session_state.messages.append({
             "role": "assistant",
             "content": [{"type": "text", "text": result.clarification_question}],
@@ -111,8 +117,33 @@ if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
     render_message("user", user_input)
 
+    _retry_msg = st.empty()
+
+    def _on_retry():
+        log.warning("Server busy — showing retry banner to user")
+        _retry_msg.warning(
+            "Our servers are experiencing high demand — please wait, retrying…"
+        )
+
     with st.spinner("Thinking…"):
-        result = run_query(user_input, history=st.session_state.api_history)
-        handle_response(result)
+        if st.session_state.pending_clarification is not None:
+            log.info("User answered clarification: %r", user_input[:120])
+            result = continue_after_clarification(
+                user_input, st.session_state.pending_clarification, on_retry=_on_retry
+            )
+        else:
+            log.info("New user query: %r", user_input[:120])
+            result = run_query(
+                user_input, history=st.session_state.api_history, on_retry=_on_retry
+            )
+
+    _retry_msg.empty()
+    log.info(
+        "Response ready — clarification=%s, display_blocks=%d, tools=%s",
+        result.clarification_question is not None,
+        len(result.display_blocks),
+        result.tool_calls,
+    )
+    handle_response(result)
 
     st.rerun()
