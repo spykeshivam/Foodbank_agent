@@ -78,6 +78,7 @@ def _build_config() -> types.GenerateContentConfig:
         system_instruction=SYSTEM_PROMPT,
         tools=[_build_tool()],
         temperature=0.2,
+        http_options=types.HttpOptions(timeout=120),
     )
 
 
@@ -92,7 +93,6 @@ def _generate_with_retry(client, model, contents, config, max_retries=5, on_retr
         try:
             response = client.models.generate_content(
                 model=model, contents=contents, config=config,
-                request_options=types.RequestOptions(timeout=120),
             )
             log.debug("API call succeeded on attempt %d", attempt_total)
             return response
