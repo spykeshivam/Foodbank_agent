@@ -77,7 +77,12 @@ def _build_tool() -> types.Tool:
 
 def _build_config() -> types.GenerateContentConfig:
     today = datetime.now().strftime("%A, %d %B %Y")
-    system_prompt = f"Today's date is {today}.\n\n{SYSTEM_PROMPT}"
+    system_prompt = (
+        f"The current date is {today}. "
+        "This is injected at runtime and is always accurate — "
+        "do not rely on your training cutoff to infer what 'now', 'recent', or 'this year' means.\n\n"
+        + SYSTEM_PROMPT
+    )
     return types.GenerateContentConfig(
         system_instruction=system_prompt,
         tools=[_build_tool()],
