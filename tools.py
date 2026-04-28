@@ -251,8 +251,9 @@ def _save_chart(fig) -> str:
 
 
 # ── 9. summarise_dataframe ───────────────────────────────────────────────────
-def summarise_dataframe(data_json: str, columns: list[str]) -> str:
-    df = pd.read_json(StringIO(data_json), orient="records")
+def summarise_dataframe(dataset: str, columns: list[str]) -> str:
+    df = _get(dataset)
+    log.info("summarise_dataframe | dataset=%s, columns=%s", dataset, columns)
     result = {}
     for col in columns:
         if col not in df.columns:

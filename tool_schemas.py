@@ -105,6 +105,8 @@ TOOL_SCHEMAS = [
         "name": "group_and_count",
         "description": (
             "Group a dataset by one or more columns and return counts. "
+            "This tool does NOT filter rows — call filter_registrations or filter_logins first "
+            "if you need to filter, then pass the resulting dataset name here. "
             "Use 'month' as a group_by value to group by calendar month (requires Timestamp). "
             "dataset can be: 'registrations', 'logins', 'joined', 'filtered_registrations', "
             "'filtered_logins', or any previously stored key. "
@@ -132,6 +134,7 @@ TOOL_SCHEMAS = [
                 },
             },
             "required": ["dataset", "group_by"],
+            "additionalProperties": False,
         },
     },
     {
@@ -192,21 +195,30 @@ TOOL_SCHEMAS = [
     {
         "name": "summarise_dataframe",
         "description": (
-            "Return descriptive statistics for specific columns in a JSON dataset. "
+            "Return descriptive statistics for specific columns of a named dataset. "
             "Numeric columns: count/mean/min/max/sum. "
-            "Categorical columns: count/unique/top_values."
+            "Categorical columns: count/unique/top_values. "
+            "dataset must be a stored dataset name such as 'registrations', 'logins', "
+            "'filtered_registrations', 'filtered_logins', or 'joined'."
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "data_json": {"type": "string", "description": "JSON array of records."},
+                "dataset": {
+                    "type": "string",
+                    "description": (
+                        "Name of the dataset to summarise — e.g. 'registrations', "
+                        "'filtered_registrations', 'joined'. NOT a JSON string."
+                    ),
+                },
                 "columns": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "List of column names to summarise.",
                 },
             },
-            "required": ["data_json", "columns"],
+            "required": ["dataset", "columns"],
+            "additionalProperties": False,
         },
     },
     {
