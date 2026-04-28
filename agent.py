@@ -7,6 +7,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import httpx
 import pandas as pd
@@ -75,8 +76,10 @@ def _build_tool() -> types.Tool:
 
 
 def _build_config() -> types.GenerateContentConfig:
+    today = datetime.now().strftime("%A, %d %B %Y")
+    system_prompt = f"Today's date is {today}.\n\n{SYSTEM_PROMPT}"
     return types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=system_prompt,
         tools=[_build_tool()],
         temperature=0.2,
         http_options=types.HttpOptions(timeout=600_000),  # 600s in milliseconds
