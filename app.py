@@ -125,25 +125,42 @@ if user_input:
             "Our servers are experiencing high demand — please wait, retrying…"
         )
 
-    with st.spinner("Thinking…"):
-        if st.session_state.pending_clarification is not None:
-            log.info("User answered clarification: %r", user_input[:120])
-            result = continue_after_clarification(
-                user_input, st.session_state.pending_clarification, on_retry=_on_retry
-            )
-        else:
-            log.info("New user query: %r", user_input[:120])
-            result = run_query(
-                user_input, history=st.session_state.api_history, on_retry=_on_retry
-            )
+    try:
+        with st.spinner("Thinking…"):
+            if st.session_state.pending_clarification is not None:
+                log.info("User answered clarification: %r", user_input[:120])
+                result = continue_after_clarification(
+                    user_input, st.session_state.pending_clarification, on_retry=_on_retry
+                )
+            else:
+                log.info("New user query: %r", user_input[:120])
+                result = run_query(
+                    user_input, history=st.session_state.api_history, on_retry=_on_retry
+                )
 
-    _retry_msg.empty()
-    log.info(
-        "Response ready — clarification=%s, display_blocks=%d, tools=%s",
-        result.clarification_question is not None,
-        len(result.display_blocks),
-        result.tool_calls,
-    )
-    handle_response(result)
+        _retry_msg.empty()
+        log.info(
+            "Response ready — clarification=%s, display_blocks=%d, tools=%s",
+            result.clarification_question is not None,
+            len(result.display_blocks),
+            result.tool_calls,
+        )
+        handle_response(result)
+
+    except Exception as exc:
+        _retry_msg.empty()
+        error_name = type(exc).__name__
+        # First line of the message only — strip internal traceback noise
+        error_detail = str(exc).splitlines()[0]
+        log.error("Unhandled error during query: %s", exc, exc_info=True)
+        with st.chat_message("assistant", avatar="🤖"):
+            st.error(
+                f"**{error_name}:** {error_detail}\n\n"
+                "Contact support to get the issue resolved."
+            )
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": [{"type": "text", "text": f"⚠️ {error_name}: {error_detail}"}],
+        })
 
     st.rerun()

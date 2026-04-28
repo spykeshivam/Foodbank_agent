@@ -6,7 +6,9 @@ google-genai SDK actually exists in the installed version. They run offline
 (no API key required) and should be the first tests to run in CI.
 """
 import inspect
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from google import genai
 from google.genai import errors as genai_errors
@@ -161,5 +163,160 @@ class TestErrorClasses:
         assert hasattr(e, "code")
 
     def test_server_error_has_code(self):
-        e = genai_errors.ServerError("test", {"code": 503, "status": "UNAVAILABLE", "message": "test"})
+        e = genai_errors.ServerError("503 UNAVAILABLE. test", {"error": {"code": 503, "status": "UNAVAILABLE", "message": "test"}})
         assert hasattr(e, "code")
+
+    def test_server_error_status_field(self):
+        """e.status is the correct field to check — e.code is the raw message string."""
+        e = genai_errors.ServerError("503 UNAVAILABLE. busy", {"error": {"code": 503, "status": "UNAVAILABLE", "message": "busy"}})
+        assert e.status == "UNAVAILABLE"
+
+    def test_server_error_504_status_field(self):
+        e = genai_errors.ServerError("504 DEADLINE_EXCEEDED. timeout", {"error": {"code": 504, "status": "DEADLINE_EXCEEDED", "message": "timeout"}})
+        assert e.status == "DEADLINE_EXCEEDED"
+
+
+# ── httpx timeout handling in _generate_with_retry ───────────────────────────
+
+class TestTimeoutRetry:
+    """Verify _generate_with_retry catches httpx timeouts and retries correctly."""
+
+    def _make_retry_fn(self, exc_factory, max_retries=3):
+        """
+        Returns (fn, on_retry_calls) where fn wraps _generate_with_retry with
+        a mock client that raises exc_factory() on every call.
+        """
+        import agent
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = exc_factory
+
+        on_retry_calls = []
+
+        def on_retry():
+            on_retry_calls.append(1)
+
+        return mock_client, on_retry_calls, on_retry
+
+    def test_httpx_importable(self):
+        import httpx as _httpx
+        assert hasattr(_httpx, "ReadTimeout")
+        assert hasattr(_httpx, "ConnectTimeout")
+        assert hasattr(_httpx, "TimeoutException")
+
+    def test_read_timeout_is_subclass_of_timeout_exception(self):
+        assert issubclass(httpx.ReadTimeout, httpx.TimeoutException)
+
+    def test_connect_timeout_is_subclass_of_timeout_exception(self):
+        assert issubclass(httpx.ConnectTimeout, httpx.TimeoutException)
+
+    def test_agent_imports_httpx(self):
+        import agent
+        assert hasattr(agent, "httpx"), "agent.py must import httpx to catch timeouts"
+
+    def test_read_timeout_triggers_retry(self):
+        import agent
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = httpx.ReadTimeout("timed out")
+
+        on_retry_calls = []
+
+        with pytest.raises(httpx.ReadTimeout):
+            agent._generate_with_retry(
+                mock_client, "gemini-2.5-flash", [], MagicMock(),
+                max_retries=3, on_retry=lambda: on_retry_calls.append(1),
+            )
+
+        assert mock_client.models.generate_content.call_count == 3
+        assert len(on_retry_calls) == 2  # called before each retry (not on final raise)
+
+    def test_connect_timeout_triggers_retry(self):
+        import agent
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = httpx.ConnectTimeout("connect timed out")
+
+        on_retry_calls = []
+
+        with pytest.raises(httpx.ConnectTimeout):
+            agent._generate_with_retry(
+                mock_client, "gemini-2.5-flash", [], MagicMock(),
+                max_retries=2, on_retry=lambda: on_retry_calls.append(1),
+            )
+
+        assert mock_client.models.generate_content.call_count == 2
+
+    def test_timeout_then_success_returns_response(self):
+        import agent
+
+        fake_response = MagicMock()
+        mock_client = MagicMock()
+        # Fail once with timeout, then succeed
+        mock_client.models.generate_content.side_effect = [
+            httpx.ReadTimeout("timed out"),
+            fake_response,
+        ]
+
+        with patch("agent.time.sleep"):  # don't actually sleep in tests
+            result = agent._generate_with_retry(
+                mock_client, "gemini-2.5-flash", [], MagicMock(),
+                max_retries=3,
+            )
+
+        assert result is fake_response
+        assert mock_client.models.generate_content.call_count == 2
+
+    def test_server_503_triggers_retry(self):
+        import agent
+
+        err = genai_errors.ServerError(
+            "503 UNAVAILABLE. high demand",
+            {"error": {"code": 503, "status": "UNAVAILABLE", "message": "high demand"}},
+        )
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = err
+
+        with pytest.raises(genai_errors.ServerError):
+            with patch("agent.time.sleep"):
+                agent._generate_with_retry(
+                    mock_client, "gemini-2.5-flash", [], MagicMock(),
+                    max_retries=2,
+                )
+
+        assert mock_client.models.generate_content.call_count == 2
+
+    def test_server_504_triggers_retry(self):
+        import agent
+
+        err = genai_errors.ServerError(
+            "504 DEADLINE_EXCEEDED. timeout",
+            {"error": {"code": 504, "status": "DEADLINE_EXCEEDED", "message": "timeout"}},
+        )
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = err
+
+        with pytest.raises(genai_errors.ServerError):
+            with patch("agent.time.sleep"):
+                agent._generate_with_retry(
+                    mock_client, "gemini-2.5-flash", [], MagicMock(),
+                    max_retries=2,
+                )
+
+        assert mock_client.models.generate_content.call_count == 2
+
+    def test_non_timeout_httpx_error_not_retried(self):
+        """httpx errors that aren't timeouts (e.g. connection refused) should raise immediately."""
+        import agent
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = httpx.NetworkError("connection refused")
+
+        with pytest.raises(Exception):
+            agent._generate_with_retry(
+                mock_client, "gemini-2.5-flash", [], MagicMock(),
+                max_retries=3,
+            )
+
+        # Should not retry on non-timeout network errors
+        assert mock_client.models.generate_content.call_count == 1

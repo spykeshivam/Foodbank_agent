@@ -8,6 +8,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
+import httpx
 import pandas as pd
 from google import genai
 from google.genai import errors as genai_errors
@@ -109,18 +110,27 @@ def _generate_with_retry(client, model, contents, config, max_retries=5, on_retr
                 log.error("ClientError %s: %s", e.code, e)
                 raise
         except genai_errors.ServerError as e:
-            if e.code in (503, 504):
+            if e.status in ("UNAVAILABLE", "DEADLINE_EXCEEDED"):
                 rate_limit_attempts += 1
-                log.warning("ServerError %d (attempt %d/%d) — retrying in 5s", e.code, rate_limit_attempts, max_retries)
+                log.warning("ServerError %s (attempt %d/%d) — retrying in 5s", e.status, rate_limit_attempts, max_retries)
                 if rate_limit_attempts >= max_retries:
-                    log.error("ServerError %d: max retries exceeded", e.code)
+                    log.error("ServerError %s: max retries exceeded", e.status)
                     raise
                 if on_retry:
                     on_retry()
                 time.sleep(5)
             else:
-                log.error("ServerError %s: %s", e.code, e)
+                log.error("ServerError %s: %s", e.status, e)
                 raise
+        except httpx.TimeoutException as e:
+            rate_limit_attempts += 1
+            log.warning("httpx.%s (attempt %d/%d) — retrying in 5s", type(e).__name__, rate_limit_attempts, max_retries)
+            if rate_limit_attempts >= max_retries:
+                log.error("httpx timeout: max retries exceeded")
+                raise
+            if on_retry:
+                on_retry()
+            time.sleep(5)
 
 
 def _args_to_dict(args) -> dict:
