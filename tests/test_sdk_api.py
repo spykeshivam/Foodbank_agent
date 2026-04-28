@@ -49,8 +49,14 @@ class TestHttpOptions:
         assert "timeout" in fields, "HttpOptions.timeout field missing"
 
     def test_instantiation(self):
-        opts = types.HttpOptions(timeout=120)
-        assert opts.timeout == 120
+        # timeout is in milliseconds — 600_000 ms = 600s
+        opts = types.HttpOptions(timeout=600_000)
+        assert opts.timeout == 600_000
+
+    def test_timeout_minimum_is_10s(self):
+        """Gemini rejects timeouts below 10s (10_000 ms). Guard against short values."""
+        opts = types.HttpOptions(timeout=600_000)
+        assert opts.timeout >= 10_000, "HttpOptions.timeout must be >= 10_000 ms (10s)"
 
     def test_timeout_accepted_by_generate_content_config(self):
         fields = types.GenerateContentConfig.model_fields
@@ -61,9 +67,9 @@ class TestHttpOptions:
     def test_config_with_http_options(self):
         config = types.GenerateContentConfig(
             temperature=0.2,
-            http_options=types.HttpOptions(timeout=120),
+            http_options=types.HttpOptions(timeout=600_000),
         )
-        assert config.http_options.timeout == 120
+        assert config.http_options.timeout == 600_000
 
 
 class TestGenerateContentConfig:

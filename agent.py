@@ -79,7 +79,7 @@ def _build_config() -> types.GenerateContentConfig:
         system_instruction=SYSTEM_PROMPT,
         tools=[_build_tool()],
         temperature=0.2,
-        http_options=types.HttpOptions(timeout=120),
+        http_options=types.HttpOptions(timeout=600_000),  # 600s in milliseconds
     )
 
 
