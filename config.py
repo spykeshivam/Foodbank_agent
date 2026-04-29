@@ -2,10 +2,6 @@ import os
 import base64
 import tempfile
 
-# Google Sheet IDs — set via environment variables, never hardcoded
-SHEET_ID = os.environ["SHEET_ID"]
-LOGIN_SHEET_ID = os.environ["LOGIN_SHEET_ID"]
-
 # Credentials — on Render set GOOGLE_CREDENTIALS_B64 to the base64-encoded
 # contents of credentials.json. Locally the file is read directly.
 _creds_b64 = os.getenv("GOOGLE_CREDENTIALS_B64")

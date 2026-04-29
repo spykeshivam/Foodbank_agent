@@ -1,6 +1,12 @@
 """Google Sheets data loader using gspread + service account credentials."""
+import os
+
 import gspread
-from config import CREDENTIALS_FILE, SHEET_ID, LOGIN_SHEET_ID
+
+from config import CREDENTIALS_FILE
+
+_SHEET_ID = os.environ["SHEET_ID"]
+_LOGIN_SHEET_ID = os.environ["LOGIN_SHEET_ID"]
 
 
 def _client() -> gspread.Client:
@@ -20,8 +26,8 @@ def fetch_sheet_data(sheet_id: str, worksheet_name: str) -> list[dict]:
 
 
 def fetch_registrations() -> list[dict]:
-    return fetch_sheet_data(SHEET_ID, "Form Responses 1")
+    return fetch_sheet_data(_SHEET_ID, "Form Responses 1")
 
 
 def fetch_logins() -> list[dict]:
-    return fetch_sheet_data(LOGIN_SHEET_ID, "Form Responses 1")
+    return fetch_sheet_data(_LOGIN_SHEET_ID, "Form Responses 1")
