@@ -141,13 +141,17 @@ def group_and_count(
     if cutoff is not None and "Timestamp" in df.columns:
         df = df[df["Timestamp"] >= cutoff]
 
-    # If grouping by month and Timestamp exists, derive a Month column
+    # Derive virtual columns from Timestamp for "month" and "date" keywords
     processed_group_by = []
     for g in group_by:
         if g.lower() == "month" and "Timestamp" in df.columns:
             df = df.copy()
             df["Month"] = df["Timestamp"].dt.to_period("M").astype(str)
             processed_group_by.append("Month")
+        elif g.lower() == "date" and "Timestamp" in df.columns:
+            df = df.copy()
+            df["Date"] = df["Timestamp"].dt.date.astype(str)
+            processed_group_by.append("Date")
         else:
             processed_group_by.append(g)
 

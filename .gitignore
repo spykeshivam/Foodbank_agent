@@ -13,7 +13,6 @@ env/
 .env
 confidential.txt
 credentials.json
-config.py
 
 # Data files — contain personal information, do not commit
 data/

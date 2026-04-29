@@ -122,7 +122,7 @@ TOOL_SCHEMAS = [
                 "group_by": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Columns to group by. Use 'month' for monthly aggregation.",
+                    "description": "Columns to group by. Use 'month' for monthly aggregation, 'date' for individual calendar dates (YYYY-MM-DD). Do NOT use the 'Day' column for calendar-date questions — 'Day' is day-of-week only.",
                 },
                 "count_col": {
                     "type": "string",

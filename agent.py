@@ -6,6 +6,7 @@ app.py and tests both import from here.
 import json
 import os
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -23,6 +24,19 @@ setup_logging()
 log = get_logger(__name__)
 
 MAX_TOOL_CALLS = 10
+
+# Sliding window of API call timestamps for rate tracking
+_api_call_times: deque[float] = deque()
+_RATE_WINDOW = 300  # 5 minutes in seconds
+
+
+def _record_api_call() -> None:
+    now = time.monotonic()
+    _api_call_times.append(now)
+    cutoff = now - _RATE_WINDOW
+    while _api_call_times and _api_call_times[0] < cutoff:
+        _api_call_times.popleft()
+    log.info("API requests in last 5 min: %d", len(_api_call_times))
 
 SYSTEM_PROMPT = """You are a data analyst assistant for a foodbank called St Dunstan's Food Bank.
 You have access to two datasets:
@@ -92,28 +106,33 @@ def _build_config() -> types.GenerateContentConfig:
 
 
 def _generate_with_retry(client, model, contents, config, max_retries=5, on_retry=None):
-    """Call generate_content with exponential backoff on 429 and fixed retry on 503/504."""
-    delay = 60
+    """Call generate_content with linear 40s backoff on 429 and fixed retry on 503/504."""
     rate_limit_attempts = 0
     attempt_total = 0
     while True:
         attempt_total += 1
         log.debug("API call attempt %d (model=%s, messages=%d)", attempt_total, model, len(contents))
         try:
+            _record_api_call()
             response = client.models.generate_content(
                 model=model, contents=contents, config=config,
             )
-            log.debug("API call succeeded on attempt %d", attempt_total)
+            u = response.usage_metadata
+            log.info(
+                "Tokens — prompt: %d, output: %d, total: %d",
+                u.prompt_token_count or 0,
+                u.candidates_token_count or 0,
+                u.total_token_count or 0,
+            )
             return response
         except genai_errors.ClientError as e:
             if e.code == 429:
                 rate_limit_attempts += 1
-                log.warning("429 rate-limit hit (attempt %d/%d) — waiting %ds", rate_limit_attempts, max_retries, delay)
+                log.warning("429 rate-limit hit (attempt %d/%d) — waiting 40s", rate_limit_attempts, max_retries)
                 if rate_limit_attempts >= max_retries:
                     log.error("429 rate-limit: max retries exceeded")
                     raise
-                time.sleep(delay)
-                delay = min(delay * 2, 300)
+                time.sleep(40)
             else:
                 log.error("ClientError %s: %s", e.code, e)
                 raise
