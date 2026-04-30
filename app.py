@@ -1,4 +1,7 @@
 """Foodbank Admin AI Chat Interface — Streamlit app."""
+import hmac
+import os
+
 import pandas as pd
 import plotly.io as pio
 import streamlit as st
@@ -17,6 +20,33 @@ st.set_page_config(
     page_icon="🥫",
     layout="wide",
 )
+
+# ── Auth gate ─────────────────────────────────────────────────────────────────
+_APP_USER = os.environ["APP_USERNAME"]
+_APP_PASS = os.environ["APP_PASSWORD"]
+
+
+def _login_gate() -> None:
+    if st.session_state.get("authenticated"):
+        return
+    st.title("🥫 Foodbank Admin AI")
+    st.subheader("Sign in")
+    with st.form("login"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in")
+    if submitted:
+        user_ok = hmac.compare_digest(username, _APP_USER)
+        pass_ok = hmac.compare_digest(password, _APP_PASS)
+        if user_ok and pass_ok:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Invalid username or password.")
+    st.stop()
+
+
+_login_gate()
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
