@@ -2,6 +2,9 @@ import os
 import base64
 import tempfile
 
+from dotenv import load_dotenv
+load_dotenv()  # loads .env if present (local dev); no-op in production
+
 # Credentials — on Render set GOOGLE_CREDENTIALS_B64 to the base64-encoded
 # contents of credentials.json. Locally the file is read directly.
 _creds_b64 = os.getenv("GOOGLE_CREDENTIALS_B64")
