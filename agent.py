@@ -230,10 +230,11 @@ def _loop(
         candidate = response.candidates[0]
         messages.append(candidate.content)
 
-        text_parts = [p.text for p in candidate.content.parts if p.text]
+        parts = candidate.content.parts or []
+        text_parts = [p.text for p in parts if p.text]
         function_calls = [
             p.function_call
-            for p in candidate.content.parts
+            for p in parts
             if p.function_call and p.function_call.name
         ]
 
