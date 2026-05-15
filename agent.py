@@ -11,10 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 import httpx
+import openai
 import pandas as pd
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
 
 from log_config import get_logger, setup_logging
 from tool_schemas import TOOL_SCHEMAS
@@ -29,14 +27,18 @@ MAX_TOOL_CALLS = 10
 _api_call_times: deque[float] = deque()
 _RATE_WINDOW = 300  # 5 minutes in seconds
 
-
-def _record_api_call() -> None:
-    now = time.monotonic()
-    _api_call_times.append(now)
-    cutoff = now - _RATE_WINDOW
-    while _api_call_times and _api_call_times[0] < cutoff:
-        _api_call_times.popleft()
-    log.info("API requests in last 5 min: %d", len(_api_call_times))
+PROVIDERS: dict[str, dict] = {
+    "Groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "model": "llama-3.3-70b-versatile",
+    },
+    "Cerebras": {
+        "base_url": "https://api.cerebras.ai/v1",
+        "api_key_env": "CEREBRAS_API_KEY",
+        "model": "llama-3.3-70b",
+    },
+}
 
 SYSTEM_PROMPT = """You are a data analyst assistant for a foodbank called St Dunstan's Food Bank.
 You have access to two datasets:
@@ -58,6 +60,15 @@ When creating charts, pass the 'data' array from group_and_count serialised as a
 Be concise and empathetic in tone — remember these results reflect real people in need."""
 
 
+def _record_api_call() -> None:
+    now = time.monotonic()
+    _api_call_times.append(now)
+    cutoff = now - _RATE_WINDOW
+    while _api_call_times and _api_call_times[0] < cutoff:
+        _api_call_times.popleft()
+    log.info("API requests in last 5 min: %d", len(_api_call_times))
+
+
 @dataclass
 class AgentResponse:
     """Structured result returned by run_query() and continue_after_clarification()."""
@@ -65,89 +76,93 @@ class AgentResponse:
     tool_calls: list[str]                   # ordered list of tool names called
     display_blocks: list[dict]              # [{type, ...}] ready for rendering
     clarification_question: str | None      # non-None if agent paused to clarify
-    history: list = field(default_factory=list)  # full message history — persist in session
+    history: list = field(default_factory=list)  # conversation turns (no system msg) — persist in session
 
     # ── Internal resume state (populated only when clarification_question is set) ──
-    # app.py passes the whole AgentResponse back to continue_after_clarification();
-    # these fields carry exactly where the loop was when it paused.
     _paused_messages: list = field(default_factory=list)
-    _paused_fc_name: str = ""               # name of the clarify_question call
+    _paused_tool_call_id: str = ""          # OpenAI tool_call id of the clarify_question call
     _paused_collected: list = field(default_factory=list)
     _paused_tool_call_count: int = 0
 
 
-def _build_tool() -> types.Tool:
-    return types.Tool(
-        function_declarations=[
-            types.FunctionDeclaration(
-                name=s["name"],
-                description=s["description"],
-                parameters_json_schema=s["parameters"],
-            )
-            for s in TOOL_SCHEMAS
-        ]
+def _build_client(provider: str) -> tuple[openai.OpenAI, str]:
+    cfg = PROVIDERS[provider]
+    client = openai.OpenAI(
+        base_url=cfg["base_url"],
+        api_key=os.environ[cfg["api_key_env"]],
     )
+    return client, cfg["model"]
 
 
-def _build_config() -> types.GenerateContentConfig:
+def _build_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": s["name"],
+                "description": s["description"],
+                "parameters": s["parameters"],
+            },
+        }
+        for s in TOOL_SCHEMAS
+    ]
+
+
+def _build_system_message() -> dict:
     today = datetime.now().strftime("%A, %d %B %Y")
-    system_prompt = (
+    content = (
         f"The current date is {today}. "
         "This is injected at runtime and is always accurate — "
         "do not rely on your training cutoff to infer what 'now', 'recent', or 'this year' means.\n\n"
         + SYSTEM_PROMPT
     )
-    return types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        tools=[_build_tool()],
-        temperature=0.2,
-        http_options=types.HttpOptions(timeout=600_000),  # 600s in milliseconds
-    )
+    return {"role": "system", "content": content}
 
 
-def _generate_with_retry(client, model, contents, config, max_retries=5, on_retry=None):
-    """Call generate_content with linear 40s backoff on 429 and fixed retry on 503/504."""
+def _generate_with_retry(client, model, messages, tools, max_retries=5, on_retry=None):
+    """Call chat.completions.create with linear 40s backoff on 429 and fixed retry on 5xx."""
     rate_limit_attempts = 0
     attempt_total = 0
     while True:
         attempt_total += 1
-        log.debug("API call attempt %d (model=%s, messages=%d)", attempt_total, model, len(contents))
+        log.debug("API call attempt %d (model=%s, messages=%d)", attempt_total, model, len(messages))
         try:
             _record_api_call()
-            response = client.models.generate_content(
-                model=model, contents=contents, config=config,
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.2,
+                timeout=600,
             )
-            u = response.usage_metadata
+            u = response.usage
             log.info(
                 "Tokens — prompt: %d, output: %d, total: %d",
-                u.prompt_token_count or 0,
-                u.candidates_token_count or 0,
-                u.total_token_count or 0,
+                u.prompt_tokens or 0,
+                u.completion_tokens or 0,
+                u.total_tokens or 0,
             )
             return response
-        except genai_errors.ClientError as e:
-            if e.code == 429:
-                rate_limit_attempts += 1
-                log.warning("429 rate-limit hit (attempt %d/%d) — waiting 40s", rate_limit_attempts, max_retries)
-                if rate_limit_attempts >= max_retries:
-                    log.error("429 rate-limit: max retries exceeded")
-                    raise
-                time.sleep(40)
-            else:
-                log.error("ClientError %s: %s", e.code, e)
+        except openai.RateLimitError:
+            rate_limit_attempts += 1
+            log.warning("429 rate-limit hit (attempt %d/%d) — waiting 40s", rate_limit_attempts, max_retries)
+            if rate_limit_attempts >= max_retries:
+                log.error("429 rate-limit: max retries exceeded")
                 raise
-        except genai_errors.ServerError as e:
-            if e.status in ("UNAVAILABLE", "DEADLINE_EXCEEDED"):
+            time.sleep(40)
+        except openai.APIStatusError as e:
+            if e.status_code in (503, 504):
                 rate_limit_attempts += 1
-                log.warning("ServerError %s (attempt %d/%d) — retrying in 5s", e.status, rate_limit_attempts, max_retries)
+                log.warning("APIStatusError %d (attempt %d/%d) — retrying in 5s", e.status_code, rate_limit_attempts, max_retries)
                 if rate_limit_attempts >= max_retries:
-                    log.error("ServerError %s: max retries exceeded", e.status)
+                    log.error("APIStatusError %d: max retries exceeded", e.status_code)
                     raise
                 if on_retry:
                     on_retry()
                 time.sleep(5)
             else:
-                log.error("ServerError %s: %s", e.status, e)
+                log.error("APIStatusError %d: %s", e.status_code, e)
                 raise
         except httpx.TimeoutException as e:
             rate_limit_attempts += 1
@@ -160,20 +175,6 @@ def _generate_with_retry(client, model, contents, config, max_retries=5, on_retr
             time.sleep(5)
 
 
-def _args_to_dict(args) -> dict:
-    if args is None:
-        return {}
-    result = {}
-    for k, v in args.items():
-        if hasattr(v, "items"):
-            result[k] = dict(v)
-        elif hasattr(v, "__iter__") and not isinstance(v, str):
-            result[k] = list(v)
-        else:
-            result[k] = v
-    return result
-
-
 def _call_tool(tool_name: str, tool_input: dict) -> str:
     fn = TOOL_FUNCTIONS.get(tool_name)
     if fn is None:
@@ -182,7 +183,6 @@ def _call_tool(tool_name: str, tool_input: dict) -> str:
     log.info("Tool call → %s | args: %s", tool_name, list(tool_input.keys()))
     try:
         result = fn(**tool_input)
-        # Log a short preview of the result (avoid flooding logs with large dataframes)
         preview = result[:200] + "…" if len(result) > 200 else result
         log.debug("Tool result ← %s | %s", tool_name, preview)
         return result
@@ -191,8 +191,8 @@ def _call_tool(tool_name: str, tool_input: dict) -> str:
         return json.dumps({"error": str(exc)})
 
 
-def _finalize(text_blocks: list[str], collected: list[dict]) -> tuple[str, list[dict]]:
-    text = "\n\n".join(text_blocks)
+def _finalize(text_parts: list[str], collected: list[dict]) -> tuple[str, list[dict]]:
+    text = "\n\n".join(t for t in text_parts if t)
     display_blocks = []
     if text:
         display_blocks.append({"type": "text", "text": text})
@@ -210,7 +210,8 @@ def _finalize(text_blocks: list[str], collected: list[dict]) -> tuple[str, list[
 
 def _loop(
     client,
-    config,
+    model: str,
+    tools: list,
     messages: list,
     tool_call_count: int,
     collected: list[dict],
@@ -222,29 +223,38 @@ def _loop(
     Mutates messages, collected, and tool_names_called in place.
     """
     log.debug("_loop start | tool_call_count=%d, history_len=%d", tool_call_count, len(messages))
+    text_parts: list[str] = []
 
     while tool_call_count < MAX_TOOL_CALLS:
         log.debug("Sending to model (tool_calls_so_far=%d)", tool_call_count)
-        response = _generate_with_retry(client, "gemini-2.5-flash", messages, config, on_retry=on_retry)
+        response = _generate_with_retry(client, model, messages, tools, on_retry=on_retry)
 
-        candidate = response.candidates[0]
-        messages.append(candidate.content)
+        msg = response.choices[0].message
 
-        text_parts = [p.text for p in candidate.content.parts if p.text]
-        function_calls = [
-            p.function_call
-            for p in candidate.content.parts
-            if p.function_call and p.function_call.name
-        ]
+        # Accumulate any text the model emits (usually only on the final turn)
+        if msg.content:
+            text_parts.append(msg.content)
+
+        # Serialise assistant message back into the history
+        assistant_entry: dict = {"role": "assistant", "content": msg.content}
+        if msg.tool_calls:
+            assistant_entry["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in msg.tool_calls
+            ]
+        messages.append(assistant_entry)
 
         log.debug(
-            "Model response: %d text part(s), %d function call(s): %s",
-            len(text_parts),
-            len(function_calls),
-            [fc.name for fc in function_calls],
+            "Model response: content=%s, tool_calls=%s",
+            bool(msg.content),
+            [tc.function.name for tc in msg.tool_calls] if msg.tool_calls else [],
         )
 
-        if not function_calls:
+        if not msg.tool_calls:
             text, display_blocks = _finalize(text_parts, collected)
             log.info(
                 "Loop complete | tools_called=%s | display_blocks=%d | text_len=%d",
@@ -252,68 +262,81 @@ def _loop(
                 len(display_blocks),
                 len(text),
             )
+            # Strip system message from history before handing back to session
+            conversation = [m for m in messages if m.get("role") != "system"]
             return AgentResponse(
                 text=text,
                 tool_calls=tool_names_called,
                 display_blocks=display_blocks,
                 clarification_question=None,
-                history=list(messages),
+                history=conversation,
             )
 
-        tool_responses: list[types.Part] = []
+        # ── Process tool calls ────────────────────────────────────────────────
+        tool_responses: list[dict] = []
+        clarify_call = None
+        clarify_question_text = ""
 
-        for fc in function_calls:
+        for tc in msg.tool_calls:
             tool_call_count += 1
-            tool_names_called.append(fc.name)
-            args = _args_to_dict(fc.args)
-            result_str = _call_tool(fc.name, args)
+            tool_names_called.append(tc.function.name)
+            args = json.loads(tc.function.arguments)
+            result_str = _call_tool(tc.function.name, args)
             result_data = json.loads(result_str)
 
-            if fc.name == "clarify_question" and result_data.get("clarification_needed"):
-                log.info("Loop paused for clarification: %s", result_data["question"])
-                return AgentResponse(
-                    text="",
-                    tool_calls=tool_names_called,
-                    display_blocks=[],
-                    clarification_question=result_data["question"],
-                    history=list(messages),
-                    _paused_messages=list(messages),
-                    _paused_fc_name=fc.name,
-                    _paused_collected=list(collected),
-                    _paused_tool_call_count=tool_call_count,
-                )
+            if tc.function.name == "clarify_question" and result_data.get("clarification_needed"):
+                # Capture and handle after processing remaining calls in the batch
+                clarify_call = tc
+                clarify_question_text = result_data["question"]
+            else:
+                tool_responses.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result_str,
+                })
+                collected.append({"name": tc.function.name, "result": result_data})
 
-            tool_responses.append(
-                types.Part.from_function_response(
-                    name=fc.name,
-                    response={"result": result_str},
-                )
+        if clarify_call:
+            # Add responses for any non-clarify tools in the same batch first
+            messages.extend(tool_responses)
+            log.info("Loop paused for clarification: %s", clarify_question_text)
+            conversation = [m for m in messages if m.get("role") != "system"]
+            return AgentResponse(
+                text="",
+                tool_calls=tool_names_called,
+                display_blocks=[],
+                clarification_question=clarify_question_text,
+                history=conversation,
+                _paused_messages=list(messages),
+                _paused_tool_call_id=clarify_call.id,
+                _paused_collected=list(collected),
+                _paused_tool_call_count=tool_call_count,
             )
-            collected.append({"name": fc.name, "result": result_data})
 
-        messages.append(types.Content(role="user", parts=tool_responses))
+        messages.extend(tool_responses)
 
     # Hit tool cap — force a final answer
     log.warning("Tool call cap (%d) reached — forcing final answer", MAX_TOOL_CALLS)
-    messages.append(types.Content(
-        role="user",
-        parts=[types.Part.from_text(text="Please provide a final answer now.")],
-    ))
-    response = _generate_with_retry(client, "gemini-2.5-flash", messages, config, on_retry=on_retry)
-    text_parts = [p.text for p in response.candidates[0].content.parts if p.text]
+    messages.append({"role": "user", "content": "Please provide a final answer now."})
+    response = _generate_with_retry(client, model, messages, tools, on_retry=on_retry)
+    msg = response.choices[0].message
+    if msg.content:
+        text_parts.append(msg.content)
     text, display_blocks = _finalize(text_parts, collected)
+    conversation = [m for m in messages if m.get("role") != "system"]
     return AgentResponse(
         text=text,
         tool_calls=tool_names_called,
         display_blocks=display_blocks,
         clarification_question=None,
-        history=list(messages),
+        history=conversation,
     )
 
 
 def run_query(
     user_text: str,
     history: list | None = None,
+    provider: str = "Groq",
     on_retry=None,
 ) -> AgentResponse:
     """
@@ -324,28 +347,32 @@ def run_query(
     user_text : str
         The user's question.
     history : list | None
-        Prior Gemini Content objects from previous turns in the session.
+        Prior conversation turn dicts (no system message) from previous turns.
         Persist AgentResponse.history back to session state after each call.
+    provider : str
+        "Groq" or "Cerebras".
     """
-    log.info("run_query | history_len=%d | query=%r", len(history or []), user_text[:120])
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    config = _build_config()
+    log.info("run_query | provider=%s | history_len=%d | query=%r", provider, len(history or []), user_text[:120])
+    client, model = _build_client(provider)
+    tools = _build_tools()
 
-    messages: list = list(history or [])
-    messages.append(types.Content(role="user", parts=[types.Part.from_text(text=user_text)]))
+    messages: list = [_build_system_message()]
+    messages.extend(history or [])
+    messages.append({"role": "user", "content": user_text})
 
-    return _loop(client, config, messages, 0, [], [], on_retry=on_retry)
+    return _loop(client, model, tools, messages, 0, [], [], on_retry=on_retry)
 
 
 def continue_after_clarification(
     user_answer: str,
     paused: AgentResponse,
+    provider: str = "Groq",
     on_retry=None,
 ) -> AgentResponse:
     """
     Resume the agentic loop after the user has answered a clarification question.
 
-    The user's answer is injected as a tool_result for the paused
+    The user's answer is injected as a tool response for the paused
     clarify_question call — the model receives full context and continues
     from exactly where it left off.
 
@@ -355,27 +382,24 @@ def continue_after_clarification(
         What the user typed in response to the clarification question.
     paused : AgentResponse
         The AgentResponse that had clarification_question set.
+    provider : str
+        "Groq" or "Cerebras". Can differ from the provider that asked the question.
     """
-    log.info("continue_after_clarification | answer=%r", user_answer[:120])
-    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    config = _build_config()
+    log.info("continue_after_clarification | provider=%s | answer=%r", provider, user_answer[:120])
+    client, model = _build_client(provider)
+    tools = _build_tools()
 
     messages = list(paused._paused_messages)
-    messages.append(
-        types.Content(
-            role="user",
-            parts=[
-                types.Part.from_function_response(
-                    name=paused._paused_fc_name,
-                    response={"user_answer": user_answer},
-                )
-            ],
-        )
-    )
+    messages.append({
+        "role": "tool",
+        "tool_call_id": paused._paused_tool_call_id,
+        "content": json.dumps({"user_answer": user_answer}),
+    })
 
     return _loop(
         client,
-        config,
+        model,
+        tools,
         messages,
         paused._paused_tool_call_count,
         list(paused._paused_collected),

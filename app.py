@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.io as pio
 import streamlit as st
 
-from agent import AgentResponse, continue_after_clarification, run_query
+from agent import PROVIDERS, AgentResponse, continue_after_clarification, run_query
 from log_config import get_logger, setup_logging
 from sheets import fetch_logins, fetch_registrations
 from tools import init_datasets
@@ -111,6 +111,14 @@ st.title("🥫 Foodbank Admin AI")
 st.caption("Ask questions about registrations and visit data in plain English.")
 
 with st.sidebar:
+    st.header("AI Provider")
+    st.selectbox(
+        "Select model provider",
+        options=list(PROVIDERS.keys()),
+        key="provider",
+        help="Switch providers if one is rate-limited or unavailable. Your conversation carries over.",
+    )
+    st.divider()
     st.header("Dataset Info")
     st.metric("Registered Users", len(registrations_df))
     st.metric("Total Logins", len(logins_df))
@@ -160,12 +168,18 @@ if user_input:
             if st.session_state.pending_clarification is not None:
                 log.info("User answered clarification: %r", user_input[:120])
                 result = continue_after_clarification(
-                    user_input, st.session_state.pending_clarification, on_retry=_on_retry
+                    user_input,
+                    st.session_state.pending_clarification,
+                    provider=st.session_state.provider,
+                    on_retry=_on_retry,
                 )
             else:
                 log.info("New user query: %r", user_input[:120])
                 result = run_query(
-                    user_input, history=st.session_state.api_history, on_retry=_on_retry
+                    user_input,
+                    history=st.session_state.api_history,
+                    provider=st.session_state.provider,
+                    on_retry=_on_retry,
                 )
 
         _retry_msg.empty()
