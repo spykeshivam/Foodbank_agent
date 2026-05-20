@@ -1,0 +1,37 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  sdk-tests:
+    name: SDK & unit tests (no credentials)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync
+      - name: Run SDK tests
+        run: uv run pytest tests/test_sdk_api.py -v
+
+  integration-tests:
+    name: Integration tests (API keys + Sheets)
+    runs-on: ubuntu-latest
+    # Only runs if the secrets are present (they won't be on forks or unset repos)
+    if: ${{ vars.INTEGRATION_TESTS_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: uv sync
+      - name: Run agent query tests
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GOOGLE_CREDENTIALS_B64: ${{ secrets.GOOGLE_CREDENTIALS_B64 }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          LOGIN_SHEET_ID: ${{ secrets.LOGIN_SHEET_ID }}
+        run: uv run pytest tests/test_agent_queries.py tests/test_sheets.py -v -s
