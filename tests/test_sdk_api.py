@@ -4,6 +4,7 @@ OpenAI SDK surface tests — catch import/attribute errors before they reach pro
 Verifies that every attribute and method we call on the openai SDK exists in the
 installed version. Runs offline (no API key required).
 """
+
 import inspect
 import os
 import sys
@@ -17,8 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from agent import PROVIDERS, _build_client, _build_tools, _generate_with_retry
 
-
 # ── PROVIDERS config ──────────────────────────────────────────────────────────
+
 
 class TestProviders:
     def test_groq_present(self):
@@ -41,6 +42,7 @@ class TestProviders:
 
 
 # ── openai SDK attributes we use in agent.py ─────────────────────────────────
+
 
 class TestOpenAIAttributes:
     def test_openai_client_importable(self):
@@ -75,6 +77,7 @@ class TestOpenAIAttributes:
 
 # ── _build_tools schema ───────────────────────────────────────────────────────
 
+
 class TestBuildTools:
     def test_returns_list(self):
         assert isinstance(_build_tools(), list)
@@ -93,15 +96,22 @@ class TestBuildTools:
     def test_expected_tool_names_present(self):
         names = {t["function"]["name"] for t in _build_tools()}
         for expected in (
-            "clarify_question", "filter_registrations", "filter_logins",
-            "join_sheets", "group_and_count", "create_bar_chart",
-            "create_line_chart", "create_pie_chart", "summarise_dataframe",
+            "clarify_question",
+            "filter_registrations",
+            "filter_logins",
+            "join_sheets",
+            "group_and_count",
+            "create_bar_chart",
+            "create_line_chart",
+            "create_pie_chart",
+            "summarise_dataframe",
             "get_column_values",
         ):
             assert expected in names, f"Tool {expected!r} missing from _build_tools()"
 
 
 # ── _build_client ─────────────────────────────────────────────────────────────
+
 
 class TestBuildClient:
     def test_groq_returns_client_and_model(self, monkeypatch):
@@ -123,6 +133,7 @@ class TestBuildClient:
 
 # ── error classes ─────────────────────────────────────────────────────────────
 
+
 class TestErrorClasses:
     def test_rate_limit_error_is_exception(self):
         assert issubclass(openai.RateLimitError, Exception)
@@ -141,6 +152,7 @@ class TestErrorClasses:
 
 # ── _generate_with_retry ──────────────────────────────────────────────────────
 
+
 class TestGenerateWithRetry:
     def _mock_client(self, side_effect):
         client = MagicMock()
@@ -148,23 +160,23 @@ class TestGenerateWithRetry:
         return client
 
     def test_rate_limit_retries_and_raises(self):
-        client = self._mock_client(openai.RateLimitError(
-            "rate limited", response=MagicMock(status_code=429), body={}
-        ))
-        with patch("agent.time.sleep"):
-            with pytest.raises(openai.RateLimitError):
-                _generate_with_retry(client, "model", [], [], max_retries=3)
+        client = self._mock_client(openai.RateLimitError("rate limited", response=MagicMock(status_code=429), body={}))
+        with patch("agent.time.sleep"), pytest.raises(openai.RateLimitError):
+            _generate_with_retry(client, "model", [], [], max_retries=3)
         assert client.chat.completions.create.call_count == 3
 
     def test_httpx_timeout_retries_and_raises(self):
         client = self._mock_client(httpx.ReadTimeout("timed out"))
         on_retry_calls = []
-        with patch("agent.time.sleep"):
-            with pytest.raises(httpx.ReadTimeout):
-                _generate_with_retry(
-                    client, "model", [], [], max_retries=3,
-                    on_retry=lambda: on_retry_calls.append(1),
-                )
+        with patch("agent.time.sleep"), pytest.raises(httpx.ReadTimeout):
+            _generate_with_retry(
+                client,
+                "model",
+                [],
+                [],
+                max_retries=3,
+                on_retry=lambda: on_retry_calls.append(1),
+            )
         assert client.chat.completions.create.call_count == 3
         assert len(on_retry_calls) == 2
 
@@ -173,10 +185,12 @@ class TestGenerateWithRetry:
         fake_response.usage.prompt_tokens = 10
         fake_response.usage.completion_tokens = 5
         fake_response.usage.total_tokens = 15
-        client = self._mock_client([
-            httpx.ReadTimeout("timed out"),
-            fake_response,
-        ])
+        client = self._mock_client(
+            [
+                httpx.ReadTimeout("timed out"),
+                fake_response,
+            ]
+        )
         with patch("agent.time.sleep"):
             result = _generate_with_retry(client, "model", [], [], max_retries=3)
         assert result is fake_response
@@ -188,9 +202,8 @@ class TestGenerateWithRetry:
             body={},
         )
         client = self._mock_client(err)
-        with patch("agent.time.sleep"):
-            with pytest.raises(openai.APIStatusError):
-                _generate_with_retry(client, "model", [], [], max_retries=2)
+        with patch("agent.time.sleep"), pytest.raises(openai.APIStatusError):
+            _generate_with_retry(client, "model", [], [], max_retries=2)
         assert client.chat.completions.create.call_count == 2
 
     def test_400_does_not_retry(self):

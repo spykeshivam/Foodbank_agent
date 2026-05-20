@@ -1,4 +1,5 @@
 """Centralised logging — FIFO file capped at MAX_LINES."""
+
 import logging
 import os
 
@@ -13,7 +14,7 @@ class _LineCapHandler(logging.FileHandler):
         self.max_lines = max_lines
         self._emit_count = 0
         try:
-            with open(filename, "r", encoding="utf-8") as f:
+            with open(filename, encoding="utf-8") as f:
                 self._line_count = sum(1 for _ in f)
         except FileNotFoundError:
             self._line_count = 0
@@ -28,7 +29,7 @@ class _LineCapHandler(logging.FileHandler):
 
     def _trim(self) -> None:
         try:
-            with open(self.baseFilename, "r", encoding="utf-8") as f:
+            with open(self.baseFilename, encoding="utf-8") as f:
                 lines = f.readlines()
             if len(lines) > self.max_lines:
                 with open(self.baseFilename, "w", encoding="utf-8") as f:

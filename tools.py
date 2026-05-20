@@ -1,13 +1,14 @@
 """Tool implementations for the Foodbank AI agent."""
+
 import json
 import re
 import tempfile
 from datetime import datetime
 from io import StringIO
-from dateutil.relativedelta import relativedelta
 
 import pandas as pd
 import plotly.express as px
+from dateutil.relativedelta import relativedelta
 
 from log_config import get_logger
 
@@ -22,9 +23,7 @@ def init_datasets(registrations: pd.DataFrame, logins: pd.DataFrame) -> None:
     _datasets["registrations"] = registrations.copy()
     _datasets["logins"] = logins.copy()
     # Ensure logins Timestamp is datetime — data has mixed formats (M/D/YYYY and ISO)
-    _datasets["logins"]["Timestamp"] = pd.to_datetime(
-        _datasets["logins"]["Timestamp"], format="mixed", dayfirst=False
-    )
+    _datasets["logins"]["Timestamp"] = pd.to_datetime(_datasets["logins"]["Timestamp"], format="mixed", dayfirst=False)
     # Ensure registrations Timestamp is datetime
     _datasets["registrations"]["Timestamp"] = pd.to_datetime(
         _datasets["registrations"]["Timestamp"], format="mixed", dayfirst=False
@@ -124,7 +123,13 @@ def join_sheets(
     if "Timestamp_login" in joined.columns:
         joined["Timestamp"] = joined["Timestamp_login"]
     _datasets["joined"] = joined
-    log.info("join_sheets | login_filters=%s, reg_filters=%s, months_back=%s | %d rows joined", login_filters, registration_filters, months_back, len(joined))
+    log.info(
+        "join_sheets | login_filters=%s, reg_filters=%s, months_back=%s | %d rows joined",
+        login_filters,
+        registration_filters,
+        months_back,
+        len(joined),
+    )
     return _df_summary(joined, "joined")
 
 
@@ -168,18 +173,32 @@ def group_and_count(
     result_key = f"grouped_{'_'.join(processed_group_by)}"
     _datasets[result_key] = grouped
 
-    log.info("group_and_count | dataset=%s, group_by=%s, months_back=%s | %d groups", dataset, processed_group_by, months_back, len(grouped))
-    return json.dumps({
-        "dataset_key": result_key,
-        "row_count": len(grouped),
-        "data": json.loads(grouped.to_json(orient="records", date_format="iso")),
-    })
+    log.info(
+        "group_and_count | dataset=%s, group_by=%s, months_back=%s | %d groups",
+        dataset,
+        processed_group_by,
+        months_back,
+        len(grouped),
+    )
+    return json.dumps(
+        {
+            "dataset_key": result_key,
+            "row_count": len(grouped),
+            "data": json.loads(grouped.to_json(orient="records", date_format="iso")),
+        }
+    )
 
 
 # ── 6. create_bar_chart ──────────────────────────────────────────────────────
 _DARK_COLORS = [
-    "#E86B3A", "#4CC9F0", "#7BED9F", "#FFC06E",
-    "#A78BFA", "#F472B6", "#34D399", "#60A5FA",
+    "#E86B3A",
+    "#4CC9F0",
+    "#7BED9F",
+    "#FFC06E",
+    "#A78BFA",
+    "#F472B6",
+    "#34D399",
+    "#60A5FA",
 ]
 
 _CHART_LAYOUT = dict(
@@ -204,8 +223,14 @@ def create_bar_chart(
 ) -> str:
     df = pd.read_json(StringIO(data_json), orient="records")
     fig = px.bar(
-        df, x=x, y=y, color=color, title=title, barmode=barmode,
-        template="plotly_dark", color_discrete_sequence=_DARK_COLORS,
+        df,
+        x=x,
+        y=y,
+        color=color,
+        title=title,
+        barmode=barmode,
+        template="plotly_dark",
+        color_discrete_sequence=_DARK_COLORS,
     )
     fig.update_layout(**_CHART_LAYOUT)
     fig.update_traces(marker_line_width=0)
@@ -222,8 +247,14 @@ def create_line_chart(
 ) -> str:
     df = pd.read_json(StringIO(data_json), orient="records")
     fig = px.line(
-        df, x=x, y=y, color=color, title=title, markers=True,
-        template="plotly_dark", color_discrete_sequence=_DARK_COLORS,
+        df,
+        x=x,
+        y=y,
+        color=color,
+        title=title,
+        markers=True,
+        template="plotly_dark",
+        color_discrete_sequence=_DARK_COLORS,
     )
     fig.update_layout(**_CHART_LAYOUT)
     fig.update_traces(line_width=2.5, marker_size=7)
@@ -239,8 +270,13 @@ def create_pie_chart(
 ) -> str:
     df = pd.read_json(StringIO(data_json), orient="records")
     fig = px.pie(
-        df, names=names, values=values, title=title, hole=0.35,
-        template="plotly_dark", color_discrete_sequence=_DARK_COLORS,
+        df,
+        names=names,
+        values=values,
+        title=title,
+        hole=0.35,
+        template="plotly_dark",
+        color_discrete_sequence=_DARK_COLORS,
     )
     fig.update_layout(**_CHART_LAYOUT)
     fig.update_traces(textfont_color="#FAFAFA", pull=0.02)
@@ -248,10 +284,10 @@ def create_pie_chart(
 
 
 def _save_chart(fig) -> str:
-    tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False, dir=tempfile.gettempdir())
-    fig.write_json(tmp.name)
-    tmp.close()
-    return json.dumps({"chart_path": tmp.name})
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False, dir=tempfile.gettempdir()) as tmp:
+        path = tmp.name
+    fig.write_json(path)
+    return json.dumps({"chart_path": path})
 
 
 # ── 9. summarise_dataframe ───────────────────────────────────────────────────

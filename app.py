@@ -1,4 +1,5 @@
 """Foodbank Admin AI Chat Interface — Streamlit app."""
+
 import hmac
 import os
 
@@ -48,6 +49,7 @@ def _login_gate() -> None:
 
 _login_gate()
 
+
 # ── Load data ─────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -62,14 +64,15 @@ log.info("App started — registrations: %d rows, logins: %d rows", len(registra
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
-    st.session_state.messages = []          # display history [{role, content}]
+    st.session_state.messages = []  # display history [{role, content}]
 if "api_history" not in st.session_state:
-    st.session_state.api_history = []       # Gemini Content objects
+    st.session_state.api_history = []  # Gemini Content objects
 if "pending_clarification" not in st.session_state:
-    st.session_state.pending_clarification = None   # paused AgentResponse or None
+    st.session_state.pending_clarification = None  # paused AgentResponse or None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def render_message(role: str, content) -> None:
     avatar = "👤" if role == "user" else "🤖"
@@ -84,26 +87,31 @@ def render_message(role: str, content) -> None:
                     st.dataframe(block["data"], use_container_width=True)
                 elif block["type"] == "chart":
                     try:
-                        fig = pio.from_json(open(block["path"]).read())
+                        with open(block["path"]) as f:
+                            fig = pio.from_json(f.read())
                         st.plotly_chart(fig, use_container_width=True)
                     except Exception as e:
                         st.warning(f"Could not render chart: {e}")
 
 
 def handle_response(result: AgentResponse) -> None:
-    st.session_state.api_history = result.history   # persist multi-turn context
+    st.session_state.api_history = result.history  # persist multi-turn context
     if result.clarification_question:
-        st.session_state.pending_clarification = result   # store full paused state
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": [{"type": "text", "text": result.clarification_question}],
-        })
+        st.session_state.pending_clarification = result  # store full paused state
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": result.clarification_question}],
+            }
+        )
     else:
         st.session_state.pending_clarification = None
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": result.display_blocks,
-        })
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": result.display_blocks,
+            }
+        )
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -159,9 +167,7 @@ if user_input:
 
     def _on_retry():
         log.warning("Server busy — showing retry banner to user")
-        _retry_msg.warning(
-            "Our servers are experiencing high demand — please wait, retrying…"
-        )
+        _retry_msg.warning("Our servers are experiencing high demand — please wait, retrying…")
 
     try:
         with st.spinner("Thinking…"):
@@ -198,13 +204,12 @@ if user_input:
         error_detail = str(exc).splitlines()[0]
         log.error("Unhandled error during query: %s", exc, exc_info=True)
         with st.chat_message("assistant", avatar="🤖"):
-            st.error(
-                f"**{error_name}:** {error_detail}\n\n"
-                "Contact support to get the issue resolved."
-            )
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": [{"type": "text", "text": f"⚠️ {error_name}: {error_detail}"}],
-        })
+            st.error(f"**{error_name}:** {error_detail}\n\nContact support to get the issue resolved.")
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"⚠️ {error_name}: {error_detail}"}],
+            }
+        )
 
     st.rerun()

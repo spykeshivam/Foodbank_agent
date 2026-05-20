@@ -4,6 +4,7 @@ Unit tests for tools.py — all 10 tool functions.
 Run with:
     py -3.12 -m pytest tests/ -v
 """
+
 import json
 import os
 import sys
@@ -49,6 +50,7 @@ def loaded_data():
 # 1. clarify_question
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestClarifyQuestion:
     def test_returns_json_string(self):
         result = clarify_question("How many months back?")
@@ -71,6 +73,7 @@ class TestClarifyQuestion:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. filter_registrations
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestFilterRegistrations:
     def test_no_filter_returns_all_rows(self):
@@ -127,6 +130,7 @@ class TestFilterRegistrations:
 # 3. filter_logins
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestFilterLogins:
     def test_no_filter_returns_all_rows(self):
         data = json.loads(filter_logins({}))
@@ -167,6 +171,7 @@ class TestFilterLogins:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. join_sheets
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestJoinSheets:
     def test_basic_join_row_count(self):
@@ -215,6 +220,7 @@ class TestJoinSheets:
 # ═══════════════════════════════════════════════════════════════════════════════
 # 5. group_and_count
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestGroupAndCount:
     def test_group_registrations_by_sex(self):
@@ -279,17 +285,21 @@ class TestGroupAndCount:
 # 6–8. Chart tools
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SAMPLE_DATA = json.dumps([
-    {"Label": "A", "count": 10},
-    {"Label": "B", "count": 25},
-    {"Label": "C", "count": 5},
-])
+SAMPLE_DATA = json.dumps(
+    [
+        {"Label": "A", "count": 10},
+        {"Label": "B", "count": 25},
+        {"Label": "C", "count": 5},
+    ]
+)
 
-SAMPLE_TIME_DATA = json.dumps([
-    {"Month": "2025-01", "count": 100},
-    {"Month": "2025-02", "count": 451},
-    {"Month": "2025-03", "count": 442},
-])
+SAMPLE_TIME_DATA = json.dumps(
+    [
+        {"Month": "2025-01", "count": 100},
+        {"Month": "2025-02", "count": 451},
+        {"Month": "2025-03", "count": 442},
+    ]
+)
 
 
 class TestCreateBarChart:
@@ -312,15 +322,17 @@ class TestCreateBarChart:
         assert os.path.exists(result["chart_path"])
 
     def test_with_color_column(self):
-        data = json.dumps([
-            {"Label": "A", "Group": "X", "count": 10},
-            {"Label": "B", "Group": "Y", "count": 20},
-        ])
+        data = json.dumps(
+            [
+                {"Label": "A", "Group": "X", "count": 10},
+                {"Label": "B", "Group": "Y", "count": 20},
+            ]
+        )
         result = json.loads(create_bar_chart(data, "Label", "count", "Group", "Grouped", "group"))
         assert os.path.exists(result["chart_path"])
 
     def test_invalid_column_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             create_bar_chart(SAMPLE_DATA, "BadX", "BadY", None, "Bad", "group")
 
 
@@ -336,12 +348,14 @@ class TestCreateLineChart:
         assert "data" in chart_data
 
     def test_with_color(self):
-        data = json.dumps([
-            {"Month": "2025-01", "Sex": "Female", "count": 40},
-            {"Month": "2025-01", "Sex": "Male", "count": 60},
-            {"Month": "2025-02", "Sex": "Female", "count": 45},
-            {"Month": "2025-02", "Sex": "Male", "count": 55},
-        ])
+        data = json.dumps(
+            [
+                {"Month": "2025-01", "Sex": "Female", "count": 40},
+                {"Month": "2025-01", "Sex": "Male", "count": 60},
+                {"Month": "2025-02", "Sex": "Female", "count": 45},
+                {"Month": "2025-02", "Sex": "Male", "count": 55},
+            ]
+        )
         result = json.loads(create_line_chart(data, "Month", "count", "Sex", "By Sex"))
         assert os.path.exists(result["chart_path"])
 
@@ -368,22 +382,27 @@ class TestCreatePieChart:
 # 9. summarise_dataframe
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestSummariseDataframe:
     def setup_method(self):
         # Store custom DataFrames under private test keys in _datasets
-        _datasets["_test_numeric"] = pd.DataFrame([
-            {"Adults": 1, "Children": 0},
-            {"Adults": 2, "Children": 1},
-            {"Adults": 3, "Children": 2},
-            {"Adults": 1, "Children": 0},
-        ])
-        _datasets["_test_cat"] = pd.DataFrame([
-            {"Sex": "Female", "Lang": "Bengali"},
-            {"Sex": "Male",   "Lang": "English"},
-            {"Sex": "Female", "Lang": "Bengali"},
-            {"Sex": "Male",   "Lang": "Arabic"},
-            {"Sex": "Female", "Lang": "Bengali"},
-        ])
+        _datasets["_test_numeric"] = pd.DataFrame(
+            [
+                {"Adults": 1, "Children": 0},
+                {"Adults": 2, "Children": 1},
+                {"Adults": 3, "Children": 2},
+                {"Adults": 1, "Children": 0},
+            ]
+        )
+        _datasets["_test_cat"] = pd.DataFrame(
+            [
+                {"Sex": "Female", "Lang": "Bengali"},
+                {"Sex": "Male", "Lang": "English"},
+                {"Sex": "Female", "Lang": "Bengali"},
+                {"Sex": "Male", "Lang": "Arabic"},
+                {"Sex": "Female", "Lang": "Bengali"},
+            ]
+        )
 
     def test_numeric_column_returns_stats(self):
         result = json.loads(summarise_dataframe("_test_numeric", ["Adults"]))
@@ -424,6 +443,7 @@ class TestSummariseDataframe:
 # 10. get_column_values
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestGetColumnValues:
     def test_sex_values(self):
         result = json.loads(get_column_values("registrations", "Sex"))
@@ -461,13 +481,16 @@ class TestGetColumnValues:
 # Internal helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestApplyFilters:
     def setup_method(self):
-        self.df = pd.DataFrame({
-            "Name": ["Alice", "Bob", "Charlie", "alice"],
-            "Score": [10, 20, 30, 40],
-            "Tag": ["foo", "bar", "foo", "baz"],
-        })
+        self.df = pd.DataFrame(
+            {
+                "Name": ["Alice", "Bob", "Charlie", "alice"],
+                "Score": [10, 20, 30, 40],
+                "Tag": ["foo", "bar", "foo", "baz"],
+            }
+        )
 
     def test_string_substring_match(self):
         result = _apply_filters(self.df.copy(), {"Name": "alice"})
@@ -493,6 +516,7 @@ class TestApplyFilters:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Integration: tool chaining
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 class TestToolChaining:
     """Simulate the multi-step flows the LLM agent uses."""
@@ -535,11 +559,13 @@ class TestToolChaining:
 
     def test_flow_full_halal_female_logins(self):
         """join_sheets → group_and_count → create_bar_chart (the example from spec)"""
-        join_result = json.loads(join_sheets(
-            {},
-            {"Sex": "Female", "Dietary Requirements": "Halal"},
-            months_back=None,
-        ))
+        join_result = json.loads(
+            join_sheets(
+                {},
+                {"Sex": "Female", "Dietary Requirements": "Halal"},
+                months_back=None,
+            )
+        )
         assert join_result["row_count"] == 72
 
         grouped = json.loads(group_and_count("joined", ["month"]))
@@ -548,10 +574,9 @@ class TestToolChaining:
         assert total == 72
 
         data_json = json.dumps(grouped["data"])
-        chart = json.loads(create_bar_chart(
-            data_json, "Month", "count", None,
-            "Female Halal Logins per Month", "group"
-        ))
+        chart = json.loads(
+            create_bar_chart(data_json, "Month", "count", None, "Female Halal Logins per Month", "group")
+        )
         assert os.path.exists(chart["chart_path"])
 
     def test_flow_line_chart_trend(self):
@@ -566,6 +591,7 @@ class TestToolChaining:
 # Defensive: bad tool calls must return JSON errors, never crash the agent
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestToolDefensiveness:
     """
     Reproduce the exact mistakes the model made in production and assert that
@@ -578,52 +604,80 @@ class TestToolDefensiveness:
 
     def test_group_and_count_with_filters_kwarg_returns_json_error(self):
         """Reproduces: group_and_count() got an unexpected keyword argument 'filters'"""
-        result = json.loads(_call_tool("group_and_count", {
-            "dataset": "registrations",
-            "group_by": ["Sex"],
-            "filters": {"Sex": "Female"},   # does not exist in signature
-        }))
+        result = json.loads(
+            _call_tool(
+                "group_and_count",
+                {
+                    "dataset": "registrations",
+                    "group_by": ["Sex"],
+                    "filters": {"Sex": "Female"},  # does not exist in signature
+                },
+            )
+        )
         assert "error" in result
 
     def test_group_and_count_with_filters_kwarg_does_not_raise(self):
         """Same as above but verifies no exception escapes _call_tool."""
         try:
-            _call_tool("group_and_count", {
-                "dataset": "registrations",
-                "group_by": ["Sex"],
-                "filters": {"Sex": "Female"},
-            })
+            _call_tool(
+                "group_and_count",
+                {
+                    "dataset": "registrations",
+                    "group_by": ["Sex"],
+                    "filters": {"Sex": "Female"},
+                },
+            )
         except Exception as exc:
             pytest.fail(f"_call_tool raised instead of returning JSON error: {exc}")
 
     def test_summarise_dataframe_with_raw_json_returns_json_error(self):
         """Reproduces: model passes '[{...}]' as dataset instead of a dataset name."""
-        result = json.loads(_call_tool("summarise_dataframe", {
-            "dataset": '[{"Adults": 1, "Children": 0}]',
-            "columns": ["Adults"],
-        }))
+        result = json.loads(
+            _call_tool(
+                "summarise_dataframe",
+                {
+                    "dataset": '[{"Adults": 1, "Children": 0}]',
+                    "columns": ["Adults"],
+                },
+            )
+        )
         assert "error" in result
 
     def test_summarise_dataframe_with_old_data_json_param_returns_json_error(self):
         """Reproduces: model uses old param name data_json= after API change."""
-        result = json.loads(_call_tool("summarise_dataframe", {
-            "data_json": '[{"Adults": 1}]',
-            "columns": ["Adults"],
-        }))
+        result = json.loads(
+            _call_tool(
+                "summarise_dataframe",
+                {
+                    "data_json": '[{"Adults": 1}]',
+                    "columns": ["Adults"],
+                },
+            )
+        )
         assert "error" in result
 
     def test_summarise_dataframe_unknown_dataset_returns_json_error(self):
-        result = json.loads(_call_tool("summarise_dataframe", {
-            "dataset": "does_not_exist",
-            "columns": ["Sex"],
-        }))
+        result = json.loads(
+            _call_tool(
+                "summarise_dataframe",
+                {
+                    "dataset": "does_not_exist",
+                    "columns": ["Sex"],
+                },
+            )
+        )
         assert "error" in result
 
     def test_group_and_count_unknown_dataset_returns_json_error(self):
-        result = json.loads(_call_tool("group_and_count", {
-            "dataset": "does_not_exist",
-            "group_by": ["Sex"],
-        }))
+        result = json.loads(
+            _call_tool(
+                "group_and_count",
+                {
+                    "dataset": "does_not_exist",
+                    "group_by": ["Sex"],
+                },
+            )
+        )
         assert "error" in result
 
     def test_all_tool_errors_are_valid_json(self):
@@ -637,5 +691,5 @@ class TestToolDefensiveness:
         ]
         for tool_name, args in bad_calls:
             raw = _call_tool(tool_name, args)
-            parsed = json.loads(raw)   # must not raise
+            parsed = json.loads(raw)  # must not raise
             assert isinstance(parsed, dict), f"{tool_name}: expected dict, got {type(parsed)}"

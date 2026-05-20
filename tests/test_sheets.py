@@ -9,6 +9,7 @@ Requires:
 Run with:
     uv run pytest tests/test_sheets.py -v
 """
+
 import os
 import sys
 
@@ -17,10 +18,9 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from sheets import fetch_registrations, fetch_logins
-
 # ── Skip entire module if credentials file is missing ─────────────────────────
 from config import CREDENTIALS_FILE
+from sheets import fetch_logins, fetch_registrations
 
 pytestmark = pytest.mark.skipif(
     not os.path.exists(CREDENTIALS_FILE),
@@ -28,6 +28,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 # ── Fixtures — fetch once per session ─────────────────────────────────────────
+
 
 @pytest.fixture(scope="session")
 def registrations() -> list[dict]:
@@ -53,6 +54,7 @@ def login_df(logins) -> pd.DataFrame:
 # Registrations sheet
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestRegistrationsLoad:
     def test_returns_list(self, registrations):
         assert isinstance(registrations, list)
@@ -66,8 +68,7 @@ class TestRegistrationsLoad:
 
     def test_no_completely_null_rows(self, registrations):
         for i, row in enumerate(registrations):
-            assert any(v not in (None, "", "N/A") for v in row.values()), \
-                f"Row {i} is entirely null/empty"
+            assert any(v not in (None, "", "N/A") for v in row.values()), f"Row {i} is entirely null/empty"
 
     def test_expected_columns_present(self, reg_df):
         required = [
@@ -118,6 +119,7 @@ class TestRegistrationsLoad:
 # Logins sheet
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestLoginsLoad:
     def test_returns_list(self, logins):
         assert isinstance(logins, list)
@@ -131,8 +133,7 @@ class TestLoginsLoad:
 
     def test_no_completely_null_rows(self, logins):
         for i, row in enumerate(logins):
-            assert any(v not in (None, "", "N/A") for v in row.values()), \
-                f"Row {i} is entirely null/empty"
+            assert any(v not in (None, "", "N/A") for v in row.values()), f"Row {i} is entirely null/empty"
 
     def test_expected_columns_present(self, login_df):
         required = ["Username", "Timestamp", "Day"]
@@ -167,6 +168,7 @@ class TestLoginsLoad:
 # Cross-sheet integrity
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class TestCrossSheetIntegrity:
     def test_login_usernames_exist_in_registrations(self, reg_df, login_df):
         reg_usernames = set(reg_df["Username"])
@@ -175,8 +177,7 @@ class TestCrossSheetIntegrity:
         # Warn if >10% of login usernames have no registration record
         pct_orphan = len(orphans) / len(login_usernames) * 100
         assert pct_orphan < 10, (
-            f"{len(orphans)} login usernames ({pct_orphan:.1f}%) "
-            f"have no matching registration record"
+            f"{len(orphans)} login usernames ({pct_orphan:.1f}%) have no matching registration record"
         )
 
     def test_join_produces_rows(self, reg_df, login_df):

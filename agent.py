@@ -3,6 +3,7 @@ Core agentic loop — no Streamlit dependency.
 
 app.py and tests both import from here.
 """
+
 import json
 import os
 import time
@@ -72,15 +73,16 @@ def _record_api_call() -> None:
 @dataclass
 class AgentResponse:
     """Structured result returned by run_query() and continue_after_clarification()."""
-    text: str                               # final natural-language answer
-    tool_calls: list[str]                   # ordered list of tool names called
-    display_blocks: list[dict]              # [{type, ...}] ready for rendering
-    clarification_question: str | None      # non-None if agent paused to clarify
+
+    text: str  # final natural-language answer
+    tool_calls: list[str]  # ordered list of tool names called
+    display_blocks: list[dict]  # [{type, ...}] ready for rendering
+    clarification_question: str | None  # non-None if agent paused to clarify
     history: list = field(default_factory=list)  # conversation turns (no system msg) — persist in session
 
     # ── Internal resume state (populated only when clarification_question is set) ──
     _paused_messages: list = field(default_factory=list)
-    _paused_tool_call_id: str = ""          # OpenAI tool_call id of the clarify_question call
+    _paused_tool_call_id: str = ""  # OpenAI tool_call id of the clarify_question call
     _paused_collected: list = field(default_factory=list)
     _paused_tool_call_count: int = 0
 
@@ -113,8 +115,7 @@ def _build_system_message() -> dict:
     content = (
         f"The current date is {today}. "
         "This is injected at runtime and is always accurate — "
-        "do not rely on your training cutoff to infer what 'now', 'recent', or 'this year' means.\n\n"
-        + SYSTEM_PROMPT
+        "do not rely on your training cutoff to infer what 'now', 'recent', or 'this year' means.\n\n" + SYSTEM_PROMPT
     )
     return {"role": "system", "content": content}
 
@@ -155,7 +156,12 @@ def _generate_with_retry(client, model, messages, tools, max_retries=5, on_retry
         except openai.APIStatusError as e:
             if e.status_code in (503, 504):
                 rate_limit_attempts += 1
-                log.warning("APIStatusError %d (attempt %d/%d) — retrying in 5s", e.status_code, rate_limit_attempts, max_retries)
+                log.warning(
+                    "APIStatusError %d (attempt %d/%d) — retrying in 5s",
+                    e.status_code,
+                    rate_limit_attempts,
+                    max_retries,
+                )
                 if rate_limit_attempts >= max_retries:
                     log.error("APIStatusError %d: max retries exceeded", e.status_code)
                     raise
@@ -199,10 +205,12 @@ def _finalize(text_parts: list[str], collected: list[dict]) -> tuple[str, list[d
         display_blocks.append({"type": "text", "text": text})
     for item in collected:
         if item["name"] == "group_and_count" and "data" in item["result"]:
-            display_blocks.append({
-                "type": "dataframe",
-                "data": pd.DataFrame(item["result"]["data"]),
-            })
+            display_blocks.append(
+                {
+                    "type": "dataframe",
+                    "data": pd.DataFrame(item["result"]["data"]),
+                }
+            )
     for item in collected:
         if "chart_path" in item["result"]:
             display_blocks.append({"type": "chart", "path": item["result"]["chart_path"]})
@@ -290,11 +298,13 @@ def _loop(
                 clarify_call = tc
                 clarify_question_text = result_data["question"]
             else:
-                tool_responses.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result_str,
-                })
+                tool_responses.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result_str,
+                    }
+                )
                 collected.append({"name": tc.function.name, "result": result_data})
 
         if clarify_call:
@@ -391,11 +401,13 @@ def continue_after_clarification(
     tools = _build_tools()
 
     messages = list(paused._paused_messages)
-    messages.append({
-        "role": "tool",
-        "tool_call_id": paused._paused_tool_call_id,
-        "content": json.dumps({"user_answer": user_answer}),
-    })
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": paused._paused_tool_call_id,
+            "content": json.dumps({"user_answer": user_answer}),
+        }
+    )
 
     return _loop(
         client,

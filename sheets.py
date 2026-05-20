@@ -1,4 +1,5 @@
 """Google Sheets data loader using gspread + service account credentials."""
+
 import os
 
 import gspread

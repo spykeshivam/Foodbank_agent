@@ -45,7 +45,7 @@ TOOL_SCHEMAS = [
                     "type": "object",
                     "description": (
                         "Dict of {column_name: value} to filter by. "
-                        "Example: {\"Sex\": \"Female\", \"Dietary Requirements\": \"Halal\"}"
+                        'Example: {"Sex": "Female", "Dietary Requirements": "Halal"}'
                     ),
                 }
             },
@@ -149,7 +149,7 @@ TOOL_SCHEMAS = [
             "properties": {
                 "data_json": {
                     "type": "string",
-                    "description": "JSON array of records, e.g. '[{\"Month\":\"2025-01\",\"count\":12}]'",
+                    "description": 'JSON array of records, e.g. \'[{"Month":"2025-01","count":12}]\'',
                 },
                 "x": {"type": "string", "description": "Column name for the x-axis."},
                 "y": {"type": "string", "description": "Column name for the y-axis."},
