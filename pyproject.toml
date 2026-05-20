@@ -5,7 +5,7 @@ description = "AI chat interface for foodbank admins"
 requires-python = ">=3.11"
 dependencies = [
     "streamlit>=1.35.0",
-    "google-genai>=1.0.0",
+    "openai>=1.0.0",
     "pandas>=2.2.0",
     "plotly>=5.22.0",
     "openpyxl>=3.1.2",

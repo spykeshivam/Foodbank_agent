@@ -1,328 +1,205 @@
 """
-SDK API surface tests — catch AttributeErrors before they reach production.
+OpenAI SDK surface tests — catch import/attribute errors before they reach production.
 
-These tests verify that every attribute, class, and method we call on the
-google-genai SDK actually exists in the installed version. They run offline
-(no API key required) and should be the first tests to run in CI.
+Verifies that every attribute and method we call on the openai SDK exists in the
+installed version. Runs offline (no API key required).
 """
 import inspect
+import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
+import openai
 import pytest
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from agent import PROVIDERS, _build_client, _build_tools, _generate_with_retry
 
 
-# ── types.* attributes we reference in agent.py ───────────────────────────────
+# ── PROVIDERS config ──────────────────────────────────────────────────────────
 
-class TestTypesAttributes:
-    def test_tool_exists(self):
-        assert hasattr(types, "Tool"), "types.Tool missing"
+class TestProviders:
+    def test_groq_present(self):
+        assert "Groq" in PROVIDERS
 
-    def test_function_declaration_exists(self):
-        assert hasattr(types, "FunctionDeclaration"), "types.FunctionDeclaration missing"
+    def test_cerebras_present(self):
+        assert "Cerebras" in PROVIDERS
 
-    def test_generate_content_config_exists(self):
-        assert hasattr(types, "GenerateContentConfig"), "types.GenerateContentConfig missing"
+    def test_each_provider_has_required_keys(self):
+        for name, cfg in PROVIDERS.items():
+            assert "base_url" in cfg, f"{name} missing base_url"
+            assert "api_key_env" in cfg, f"{name} missing api_key_env"
+            assert "model" in cfg, f"{name} missing model"
 
-    def test_content_exists(self):
-        assert hasattr(types, "Content"), "types.Content missing"
+    def test_groq_model(self):
+        assert PROVIDERS["Groq"]["model"] == "llama-3.3-70b-versatile"
 
-    def test_part_exists(self):
-        assert hasattr(types, "Part"), "types.Part missing"
-
-    def test_http_options_exists(self):
-        assert hasattr(types, "HttpOptions"), "types.HttpOptions missing — timeout cannot be set"
-
-    def test_no_request_options(self):
-        """Guard against re-introducing the removed types.RequestOptions."""
-        assert not hasattr(types, "RequestOptions"), (
-            "types.RequestOptions exists in this SDK version — update agent.py to use it"
-        )
+    def test_cerebras_model(self):
+        assert PROVIDERS["Cerebras"]["model"] == "llama-3.3-70b"
 
 
-class TestHttpOptions:
-    def test_timeout_field(self):
-        fields = types.HttpOptions.model_fields
-        assert "timeout" in fields, "HttpOptions.timeout field missing"
+# ── openai SDK attributes we use in agent.py ─────────────────────────────────
 
-    def test_instantiation(self):
-        # timeout is in milliseconds — 600_000 ms = 600s
-        opts = types.HttpOptions(timeout=600_000)
-        assert opts.timeout == 600_000
+class TestOpenAIAttributes:
+    def test_openai_client_importable(self):
+        assert hasattr(openai, "OpenAI")
 
-    def test_timeout_minimum_is_10s(self):
-        """Gemini rejects timeouts below 10s (10_000 ms). Guard against short values."""
-        opts = types.HttpOptions(timeout=600_000)
-        assert opts.timeout >= 10_000, "HttpOptions.timeout must be >= 10_000 ms (10s)"
+    def test_rate_limit_error_importable(self):
+        assert hasattr(openai, "RateLimitError")
 
-    def test_timeout_accepted_by_generate_content_config(self):
-        fields = types.GenerateContentConfig.model_fields
-        assert "http_options" in fields, (
-            "GenerateContentConfig.http_options missing — cannot pass HttpOptions for timeout"
-        )
+    def test_api_status_error_importable(self):
+        assert hasattr(openai, "APIStatusError")
 
-    def test_config_with_http_options(self):
-        config = types.GenerateContentConfig(
-            temperature=0.2,
-            http_options=types.HttpOptions(timeout=600_000),
-        )
-        assert config.http_options.timeout == 600_000
-
-
-class TestGenerateContentConfig:
-    def test_system_instruction_field(self):
-        assert "system_instruction" in types.GenerateContentConfig.model_fields
-
-    def test_tools_field(self):
-        assert "tools" in types.GenerateContentConfig.model_fields
-
-    def test_temperature_field(self):
-        assert "temperature" in types.GenerateContentConfig.model_fields
-
-
-class TestFunctionDeclaration:
-    def test_parameters_json_schema_accepted(self):
-        """Verify FunctionDeclaration accepts parameters_json_schema (not input_schema)."""
-        fd = types.FunctionDeclaration(
-            name="test_fn",
-            description="A test function",
-            parameters_json_schema={
-                "type": "object",
-                "properties": {"x": {"type": "string"}},
-            },
-        )
-        assert fd.name == "test_fn"
-
-
-class TestPart:
-    def test_from_text_requires_keyword(self):
-        """from_text must be called with text= keyword (positional arg removed in SDK)."""
-        part = types.Part.from_text(text="hello")
-        assert part.text == "hello"
-
-    def test_from_text_no_positional(self):
-        sig = inspect.signature(types.Part.from_text)
-        params = list(sig.parameters.values())
-        # All params should be keyword-only or have no positional-only marker that
-        # would let a bare string pass — calling with positional raises TypeError.
-        with pytest.raises(TypeError):
-            types.Part.from_text("hello")  # type: ignore[call-arg]
-
-    def test_from_function_response_exists(self):
-        assert callable(types.Part.from_function_response)
-
-    def test_from_function_response_works(self):
-        part = types.Part.from_function_response(
-            name="my_tool",
-            response={"result": "ok"},
-        )
-        assert part.function_response.name == "my_tool"
-
-
-class TestContent:
-    def test_instantiation_with_role_and_parts(self):
-        content = types.Content(
-            role="user",
-            parts=[types.Part.from_text(text="hi")],
-        )
-        assert content.role == "user"
-        assert len(content.parts) == 1
-
-
-# ── genai.Client ──────────────────────────────────────────────────────────────
-
-class TestGenaiClient:
-    def test_client_importable(self):
-        assert hasattr(genai, "Client")
-
-    def test_client_accepts_api_key(self):
-        sig = inspect.signature(genai.Client.__init__)
+    def test_openai_accepts_base_url_and_api_key(self):
+        sig = inspect.signature(openai.OpenAI.__init__)
+        assert "base_url" in sig.parameters
         assert "api_key" in sig.parameters
 
-    def test_models_generate_content_exists(self):
-        # Instantiate with a dummy key — no network call made here
-        client = genai.Client(api_key="dummy")
-        assert callable(client.models.generate_content)
+    def test_chat_completions_create_exists(self):
+        client = openai.OpenAI(base_url="https://example.com", api_key="dummy")
+        assert callable(client.chat.completions.create)
 
-    def test_generate_content_signature(self):
-        client = genai.Client(api_key="dummy")
-        sig = inspect.signature(client.models.generate_content)
-        assert "model" in sig.parameters
-        assert "contents" in sig.parameters
-        assert "config" in sig.parameters
+    def test_create_signature_has_required_params(self):
+        client = openai.OpenAI(base_url="https://example.com", api_key="dummy")
+        sig = inspect.signature(client.chat.completions.create)
+        for param in ("model", "messages", "tools", "tool_choice", "temperature"):
+            assert param in sig.parameters, f"create() missing param: {param}"
+
+    def test_parallel_tool_calls_param_exists(self):
+        client = openai.OpenAI(base_url="https://example.com", api_key="dummy")
+        sig = inspect.signature(client.chat.completions.create)
+        assert "parallel_tool_calls" in sig.parameters
+
+
+# ── _build_tools schema ───────────────────────────────────────────────────────
+
+class TestBuildTools:
+    def test_returns_list(self):
+        assert isinstance(_build_tools(), list)
+
+    def test_each_tool_has_type_function(self):
+        for t in _build_tools():
+            assert t["type"] == "function"
+
+    def test_each_tool_has_name_description_parameters(self):
+        for t in _build_tools():
+            fn = t["function"]
+            assert "name" in fn
+            assert "description" in fn
+            assert "parameters" in fn
+
+    def test_expected_tool_names_present(self):
+        names = {t["function"]["name"] for t in _build_tools()}
+        for expected in (
+            "clarify_question", "filter_registrations", "filter_logins",
+            "join_sheets", "group_and_count", "create_bar_chart",
+            "create_line_chart", "create_pie_chart", "summarise_dataframe",
+            "get_column_values",
+        ):
+            assert expected in names, f"Tool {expected!r} missing from _build_tools()"
+
+
+# ── _build_client ─────────────────────────────────────────────────────────────
+
+class TestBuildClient:
+    def test_groq_returns_client_and_model(self, monkeypatch):
+        monkeypatch.setenv("GROQ_API_KEY", "test-key")
+        client, model = _build_client("Groq")
+        assert isinstance(client, openai.OpenAI)
+        assert model == "llama-3.3-70b-versatile"
+
+    def test_cerebras_returns_client_and_model(self, monkeypatch):
+        monkeypatch.setenv("CEREBRAS_API_KEY", "test-key")
+        client, model = _build_client("Cerebras")
+        assert isinstance(client, openai.OpenAI)
+        assert model == "llama-3.3-70b"
+
+    def test_unknown_provider_raises(self):
+        with pytest.raises(KeyError):
+            _build_client("UnknownProvider")
 
 
 # ── error classes ─────────────────────────────────────────────────────────────
 
 class TestErrorClasses:
-    def test_client_error_exists(self):
-        assert hasattr(genai_errors, "ClientError")
+    def test_rate_limit_error_is_exception(self):
+        assert issubclass(openai.RateLimitError, Exception)
 
-    def test_server_error_exists(self):
-        assert hasattr(genai_errors, "ServerError")
+    def test_api_status_error_has_status_code(self):
+        assert issubclass(openai.APIStatusError, Exception)
 
-    def test_client_error_has_code(self):
-        e = genai_errors.ClientError("test", {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "test"})
-        assert hasattr(e, "code")
-
-    def test_server_error_has_code(self):
-        e = genai_errors.ServerError("503 UNAVAILABLE. test", {"error": {"code": 503, "status": "UNAVAILABLE", "message": "test"}})
-        assert hasattr(e, "code")
-
-    def test_server_error_status_field(self):
-        """e.status is the correct field to check — e.code is the raw message string."""
-        e = genai_errors.ServerError("503 UNAVAILABLE. busy", {"error": {"code": 503, "status": "UNAVAILABLE", "message": "busy"}})
-        assert e.status == "UNAVAILABLE"
-
-    def test_server_error_504_status_field(self):
-        e = genai_errors.ServerError("504 DEADLINE_EXCEEDED. timeout", {"error": {"code": 504, "status": "DEADLINE_EXCEEDED", "message": "timeout"}})
-        assert e.status == "DEADLINE_EXCEEDED"
-
-
-# ── httpx timeout handling in _generate_with_retry ───────────────────────────
-
-class TestTimeoutRetry:
-    """Verify _generate_with_retry catches httpx timeouts and retries correctly."""
-
-    def _make_retry_fn(self, exc_factory, max_retries=3):
-        """
-        Returns (fn, on_retry_calls) where fn wraps _generate_with_retry with
-        a mock client that raises exc_factory() on every call.
-        """
-        import agent
-
-        mock_client = MagicMock()
-        mock_client.models.generate_content.side_effect = exc_factory
-
-        on_retry_calls = []
-
-        def on_retry():
-            on_retry_calls.append(1)
-
-        return mock_client, on_retry_calls, on_retry
-
-    def test_httpx_importable(self):
-        import httpx as _httpx
-        assert hasattr(_httpx, "ReadTimeout")
-        assert hasattr(_httpx, "ConnectTimeout")
-        assert hasattr(_httpx, "TimeoutException")
+    def test_httpx_timeout_importable(self):
+        assert hasattr(httpx, "TimeoutException")
+        assert hasattr(httpx, "ReadTimeout")
+        assert hasattr(httpx, "ConnectTimeout")
 
     def test_read_timeout_is_subclass_of_timeout_exception(self):
         assert issubclass(httpx.ReadTimeout, httpx.TimeoutException)
 
-    def test_connect_timeout_is_subclass_of_timeout_exception(self):
-        assert issubclass(httpx.ConnectTimeout, httpx.TimeoutException)
 
-    def test_agent_imports_httpx(self):
-        import agent
-        assert hasattr(agent, "httpx"), "agent.py must import httpx to catch timeouts"
+# ── _generate_with_retry ──────────────────────────────────────────────────────
 
-    def test_read_timeout_triggers_retry(self):
-        import agent
+class TestGenerateWithRetry:
+    def _mock_client(self, side_effect):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = side_effect
+        return client
 
-        mock_client = MagicMock()
-        mock_client.models.generate_content.side_effect = httpx.ReadTimeout("timed out")
+    def test_rate_limit_retries_and_raises(self):
+        client = self._mock_client(openai.RateLimitError(
+            "rate limited", response=MagicMock(status_code=429), body={}
+        ))
+        with patch("agent.time.sleep"):
+            with pytest.raises(openai.RateLimitError):
+                _generate_with_retry(client, "model", [], [], max_retries=3)
+        assert client.chat.completions.create.call_count == 3
 
+    def test_httpx_timeout_retries_and_raises(self):
+        client = self._mock_client(httpx.ReadTimeout("timed out"))
         on_retry_calls = []
+        with patch("agent.time.sleep"):
+            with pytest.raises(httpx.ReadTimeout):
+                _generate_with_retry(
+                    client, "model", [], [], max_retries=3,
+                    on_retry=lambda: on_retry_calls.append(1),
+                )
+        assert client.chat.completions.create.call_count == 3
+        assert len(on_retry_calls) == 2
 
-        with pytest.raises(httpx.ReadTimeout):
-            agent._generate_with_retry(
-                mock_client, "gemini-2.5-flash", [], MagicMock(),
-                max_retries=3, on_retry=lambda: on_retry_calls.append(1),
-            )
-
-        assert mock_client.models.generate_content.call_count == 3
-        assert len(on_retry_calls) == 2  # called before each retry (not on final raise)
-
-    def test_connect_timeout_triggers_retry(self):
-        import agent
-
-        mock_client = MagicMock()
-        mock_client.models.generate_content.side_effect = httpx.ConnectTimeout("connect timed out")
-
-        on_retry_calls = []
-
-        with pytest.raises(httpx.ConnectTimeout):
-            agent._generate_with_retry(
-                mock_client, "gemini-2.5-flash", [], MagicMock(),
-                max_retries=2, on_retry=lambda: on_retry_calls.append(1),
-            )
-
-        assert mock_client.models.generate_content.call_count == 2
-
-    def test_timeout_then_success_returns_response(self):
-        import agent
-
+    def test_success_on_second_attempt(self):
         fake_response = MagicMock()
-        mock_client = MagicMock()
-        # Fail once with timeout, then succeed
-        mock_client.models.generate_content.side_effect = [
+        fake_response.usage.prompt_tokens = 10
+        fake_response.usage.completion_tokens = 5
+        fake_response.usage.total_tokens = 15
+        client = self._mock_client([
             httpx.ReadTimeout("timed out"),
             fake_response,
-        ]
-
-        with patch("agent.time.sleep"):  # don't actually sleep in tests
-            result = agent._generate_with_retry(
-                mock_client, "gemini-2.5-flash", [], MagicMock(),
-                max_retries=3,
-            )
-
+        ])
+        with patch("agent.time.sleep"):
+            result = _generate_with_retry(client, "model", [], [], max_retries=3)
         assert result is fake_response
-        assert mock_client.models.generate_content.call_count == 2
 
-    def test_server_503_triggers_retry(self):
-        import agent
-
-        err = genai_errors.ServerError(
-            "503 UNAVAILABLE. high demand",
-            {"error": {"code": 503, "status": "UNAVAILABLE", "message": "high demand"}},
+    def test_503_retries(self):
+        err = openai.APIStatusError(
+            "service unavailable",
+            response=MagicMock(status_code=503),
+            body={},
         )
-        mock_client = MagicMock()
-        mock_client.models.generate_content.side_effect = err
+        client = self._mock_client(err)
+        with patch("agent.time.sleep"):
+            with pytest.raises(openai.APIStatusError):
+                _generate_with_retry(client, "model", [], [], max_retries=2)
+        assert client.chat.completions.create.call_count == 2
 
-        with pytest.raises(genai_errors.ServerError):
-            with patch("agent.time.sleep"):
-                agent._generate_with_retry(
-                    mock_client, "gemini-2.5-flash", [], MagicMock(),
-                    max_retries=2,
-                )
-
-        assert mock_client.models.generate_content.call_count == 2
-
-    def test_server_504_triggers_retry(self):
-        import agent
-
-        err = genai_errors.ServerError(
-            "504 DEADLINE_EXCEEDED. timeout",
-            {"error": {"code": 504, "status": "DEADLINE_EXCEEDED", "message": "timeout"}},
+    def test_400_does_not_retry(self):
+        err = openai.APIStatusError(
+            "bad request",
+            response=MagicMock(status_code=400),
+            body={},
         )
-        mock_client = MagicMock()
-        mock_client.models.generate_content.side_effect = err
-
-        with pytest.raises(genai_errors.ServerError):
-            with patch("agent.time.sleep"):
-                agent._generate_with_retry(
-                    mock_client, "gemini-2.5-flash", [], MagicMock(),
-                    max_retries=2,
-                )
-
-        assert mock_client.models.generate_content.call_count == 2
-
-    def test_non_timeout_httpx_error_not_retried(self):
-        """httpx errors that aren't timeouts (e.g. connection refused) should raise immediately."""
-        import agent
-
-        mock_client = MagicMock()
-        mock_client.models.generate_content.side_effect = httpx.NetworkError("connection refused")
-
-        with pytest.raises(Exception):
-            agent._generate_with_retry(
-                mock_client, "gemini-2.5-flash", [], MagicMock(),
-                max_retries=3,
-            )
-
-        # Should not retry on non-timeout network errors
-        assert mock_client.models.generate_content.call_count == 1
+        client = self._mock_client(err)
+        with pytest.raises(openai.APIStatusError):
+            _generate_with_retry(client, "model", [], [], max_retries=3)
+        assert client.chat.completions.create.call_count == 1

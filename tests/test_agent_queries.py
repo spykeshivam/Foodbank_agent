@@ -42,8 +42,8 @@ pytestmark = pytest.mark.skipif(
     reason="credentials.json not found — skipping agent query tests",
 )
 
-if not os.environ.get("GEMINI_API_KEY"):
-    pytestmark = pytest.mark.skip(reason="GEMINI_API_KEY not set")
+if not os.environ.get("GROQ_API_KEY"):
+    pytestmark = pytest.mark.skip(reason="GROQ_API_KEY not set")
 
 
 # ── Load real data once for the session ───────────────────────────────────────
@@ -138,7 +138,7 @@ class TestAgentQueries:
         Tests: filter_registrations + numerical answer in text.
         """
         query = "How many people have Halal dietary requirements?"
-        result = run_query(query)
+        result = run_query(query, provider="Groq")
         assert_valid_response(result, query)
 
         # The answer must mention "halal" in some form
@@ -151,7 +151,7 @@ class TestAgentQueries:
         Tests: group_and_count + create_pie_chart + chart block in output.
         """
         query = "Show me the gender breakdown of registered users as a pie chart."
-        result = run_query(query)
+        result = run_query(query, provider="Groq")
         assert_valid_response(result, query)
 
         # Must have produced a chart
@@ -169,7 +169,7 @@ class TestAgentQueries:
         Tests: group_and_count(month) + create_bar_chart + dataframe block.
         """
         query = "How many logins were there each month? Show a bar chart."
-        result = run_query(query)
+        result = run_query(query, provider="Groq")
         assert_valid_response(result, query)
 
         # Must have a chart
@@ -186,7 +186,7 @@ class TestAgentQueries:
         Tests: join_sheets + filter on both sheets + numerical result.
         """
         query = "How many male users visited on a Tuesday?"
-        result = run_query(query)
+        result = run_query(query, provider="Groq")
         assert_valid_response(result, query)
 
         # Must have joined the sheets
@@ -199,7 +199,7 @@ class TestAgentQueries:
         Tests: group_and_count(Primary Spoken Language) + dataframe block.
         """
         query = "What are the top spoken languages among registered users? Show a chart."
-        result = run_query(query)
+        result = run_query(query, provider="Groq")
         assert_valid_response(result, query)
 
         # Must have a dataframe or chart
