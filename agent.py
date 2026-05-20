@@ -133,6 +133,7 @@ def _generate_with_retry(client, model, messages, tools, max_retries=5, on_retry
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
+                parallel_tool_calls=False,
                 temperature=0.2,
                 timeout=600,
             )
