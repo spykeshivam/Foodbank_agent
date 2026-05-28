@@ -109,6 +109,22 @@ class TestBuildTools:
         ):
             assert expected in names, f"Tool {expected!r} missing from _build_tools()"
 
+    def test_months_back_allows_null_in_schema(self):
+        # Groq rejects months_back=null if the schema only lists "integer".
+        # Ensure all tools with months_back declare ["integer", "null"].
+        tools_with_months_back = ("filter_logins", "join_sheets", "group_and_count")
+        for t in _build_tools():
+            name = t["function"]["name"]
+            if name not in tools_with_months_back:
+                continue
+            props = t["function"]["parameters"]["properties"]
+            assert "months_back" in props, f"{name} missing months_back property"
+            mb_type = props["months_back"]["type"]
+            assert "null" in mb_type, (
+                f"{name}.months_back schema must include 'null' to prevent Groq 400 "
+                f"when the model passes months_back=null. Got: {mb_type!r}"
+            )
+
 
 # ── _build_client ─────────────────────────────────────────────────────────────
 

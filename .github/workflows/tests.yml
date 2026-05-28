@@ -5,6 +5,14 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
+    inputs:
+      run_integration:
+        description: "Run integration tests? (requires secrets)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
 
 jobs:
   lint:
@@ -35,7 +43,7 @@ jobs:
     name: Integration tests (API keys + Sheets)
     runs-on: ubuntu-latest
     # Only runs if the secrets are present (they won't be on forks or unset repos)
-    if: ${{ vars.INTEGRATION_TESTS_ENABLED == 'true' }}
+    if: ${{ vars.INTEGRATION_TESTS_ENABLED == 'true' || inputs.run_integration == 'true' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4

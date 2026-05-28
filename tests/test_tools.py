@@ -150,9 +150,10 @@ class TestFilterLogins:
         assert data["row_count"] == 0
 
     def test_months_back_covers_all_data(self):
-        # 16 months back from Apr 2026 safely covers all data (Jan–Apr 2025)
-        data = json.loads(filter_logins({}, months_back=16))
-        assert data["row_count"] == 1121
+        # 30 months back safely covers all data regardless of when this test runs
+        all_rows = json.loads(filter_logins({}))["row_count"]
+        data = json.loads(filter_logins({}, months_back=30))
+        assert data["row_count"] == all_rows
 
     def test_months_back_partial(self):
         all_rows = json.loads(filter_logins({}))["row_count"]
@@ -191,8 +192,10 @@ class TestJoinSheets:
         assert data["row_count"] == 0
 
     def test_months_back_full_coverage(self):
-        data = json.loads(join_sheets({}, {}, months_back=16))
-        assert data["row_count"] == 296
+        # 30 months back safely covers all data regardless of when this test runs
+        all_rows = json.loads(join_sheets({}, {}))["row_count"]
+        data = json.loads(join_sheets({}, {}, months_back=30))
+        assert data["row_count"] == all_rows
 
     def test_joined_dataset_stored(self):
         join_sheets({}, {})

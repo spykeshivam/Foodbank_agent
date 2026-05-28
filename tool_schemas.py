@@ -67,7 +67,7 @@ TOOL_SCHEMAS = [
                     "description": "Dict of {column_name: value} to filter by.",
                 },
                 "months_back": {
-                    "type": "integer",
+                    "type": ["integer", "null"],
                     "description": "Restrict to last N months. Omit for no time restriction.",
                 },
             },
@@ -94,7 +94,7 @@ TOOL_SCHEMAS = [
                     "description": "Filters to apply to the registrations sheet.",
                 },
                 "months_back": {
-                    "type": "integer",
+                    "type": ["integer", "null"],
                     "description": "Restrict logins to last N months. Omit for no restriction.",
                 },
             },
@@ -129,7 +129,7 @@ TOOL_SCHEMAS = [
                     "description": "Column to count (optional). If omitted, counts rows.",
                 },
                 "months_back": {
-                    "type": "integer",
+                    "type": ["integer", "null"],
                     "description": "Further restrict to last N months before grouping.",
                 },
             },
