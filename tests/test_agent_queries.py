@@ -2,12 +2,11 @@
 End-to-end agent query tests.
 
 Runs 5 diverse natural-language queries through the full agentic loop
-(real Gemini API + real Google Sheets data) and asserts that every
-response is correctly structured.
+against both Groq and Cerebras, asserting every response is correctly structured.
 
 Output format contract for every response:
   - AgentResponse returned (not an exception)
-  - .text        : non-empty string
+  - .text        : non-empty string containing at least one digit
   - .tool_calls  : at least one tool was called
   - .display_blocks : list with at least one block
   - each block has a valid "type" key in {"text", "dataframe", "chart"}
@@ -17,9 +16,8 @@ Output format contract for every response:
 
 Run with:
     uv run pytest tests/test_agent_queries.py -v -s
-
-Note: tests run sequentially with a 15-second pause between each to
-stay within the free-tier rate limit (10 RPM).
+    uv run pytest tests/test_agent_queries.py -v -s -k Groq
+    uv run pytest tests/test_agent_queries.py -v -s -k Cerebras
 """
 
 import json
@@ -32,22 +30,24 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from agent import AgentResponse, run_query
+from agent import AgentResponse, PROVIDERS, run_query
 from config import CREDENTIALS_FILE
 from sheets import fetch_logins, fetch_registrations
 from tools import init_datasets
 
-# ── Skip if credentials or API key missing ────────────────────────────────────
+# ── Skip entire module if credentials missing ─────────────────────────────────
 pytestmark = pytest.mark.skipif(
     not os.path.exists(CREDENTIALS_FILE),
     reason="credentials.json not found — skipping agent query tests",
 )
 
-if not os.environ.get("GROQ_API_KEY"):
-    pytestmark = pytest.mark.skip(reason="GROQ_API_KEY not set")
+
+def _provider_available(provider: str) -> bool:
+    key_env = PROVIDERS[provider]["api_key_env"]
+    return bool(os.environ.get(key_env))
 
 
-# ── Load real data once for the session ───────────────────────────────────────
+# ── Load real data once for the whole test session ────────────────────────────
 @pytest.fixture(scope="session", autouse=True)
 def load_real_data():
     reg = pd.DataFrame(fetch_registrations())
@@ -57,7 +57,7 @@ def load_real_data():
 
 @pytest.fixture(autouse=True)
 def rate_limit_pause(request):
-    """Pause 15 s before each test (except the first) to respect free-tier RPM."""
+    """Pause between tests to respect free-tier RPM limits."""
     if getattr(request.session, "_query_test_count", 0) > 0:
         time.sleep(30)
     request.session._query_test_count = getattr(request.session, "_query_test_count", 0) + 1
@@ -65,29 +65,18 @@ def rate_limit_pause(request):
 
 # ── Shared format checker ─────────────────────────────────────────────────────
 def assert_valid_response(result: AgentResponse, query: str) -> None:
-    """Assert that an AgentResponse meets the output format contract."""
     assert isinstance(result, AgentResponse), f"Expected AgentResponse, got {type(result)} for: {query!r}"
-
-    # Must not be a clarification pause for these unambiguous queries
     assert result.clarification_question is None, (
         f"Agent asked for clarification unexpectedly: {result.clarification_question!r}\nQuery: {query!r}"
     )
-
-    # Must have called at least one tool
     assert len(result.tool_calls) >= 1, f"No tools were called for: {query!r}"
-
-    # Text must be non-empty
     assert result.text.strip(), f"Response text is empty for: {query!r}"
-
-    # Must contain a number somewhere in the text
-    digits_in_text = any(ch.isdigit() for ch in result.text)
-    assert digits_in_text, f"Response contains no numerical result for: {query!r}\nText: {result.text}"
-
-    # display_blocks must be a non-empty list
+    assert any(ch.isdigit() for ch in result.text), (
+        f"Response contains no numerical result for: {query!r}\nText: {result.text}"
+    )
     assert isinstance(result.display_blocks, list), f"display_blocks is not a list for: {query!r}"
     assert len(result.display_blocks) >= 1, f"display_blocks is empty for: {query!r}"
 
-    # Every block must have a valid type and correct payload
     valid_types = {"text", "dataframe", "chart"}
     for i, block in enumerate(result.display_blocks):
         assert "type" in block, f"Block {i} missing 'type' key for: {query!r}"
@@ -97,13 +86,10 @@ def assert_valid_response(result: AgentResponse, query: str) -> None:
             assert isinstance(block.get("text"), str) and block["text"].strip(), (
                 f"Text block {i} has empty/missing text for: {query!r}"
             )
-
         elif block["type"] == "dataframe":
             df = block.get("data")
             assert isinstance(df, pd.DataFrame), f"Dataframe block {i} 'data' is not a DataFrame for: {query!r}"
             assert not df.empty, f"Dataframe block {i} is empty for: {query!r}"
-            assert len(df.columns) >= 1, f"Dataframe block {i} has no columns for: {query!r}"
-
         elif block["type"] == "chart":
             path = block.get("path")
             assert isinstance(path, str), f"Chart block {i} 'path' is not a string for: {query!r}"
@@ -114,84 +100,69 @@ def assert_valid_response(result: AgentResponse, query: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# The 5 diverse queries
+# Parametrized test class — runs every query against Groq AND Cerebras
 # ═══════════════════════════════════════════════════════════════════════════════
 
+PROVIDERS_TO_TEST = ["Groq", "Cerebras"]
 
+
+@pytest.mark.parametrize("provider", PROVIDERS_TO_TEST)
 class TestAgentQueries:
-    def test_q1_simple_count(self):
-        """
-        Simple count query — no join, no chart required.
-        Tests: filter_registrations + numerical answer in text.
-        """
-        query = "How many people have Halal dietary requirements?"
-        result = run_query(query, provider="Groq")
-        assert_valid_response(result, query)
+    def _skip_if_unavailable(self, provider: str):
+        if not _provider_available(provider):
+            pytest.skip(f"{PROVIDERS[provider]['api_key_env']} not set — skipping {provider} tests")
 
-        # The answer must mention "halal" in some form
+    def test_q1_simple_count(self, provider):
+        """Simple count — filter_registrations + numerical answer."""
+        self._skip_if_unavailable(provider)
+        query = "How many people have Halal dietary requirements?"
+        result = run_query(query, provider=provider)
+        assert_valid_response(result, query)
         assert "halal" in result.text.lower(), f"Expected 'halal' in response, got: {result.text}"
 
-    def test_q2_pie_chart(self):
-        """
-        Breakdown query expecting a pie chart.
-        Tests: group_and_count + create_pie_chart + chart block in output.
-        """
+    def test_q2_pie_chart(self, provider):
+        """Breakdown query expecting a pie chart."""
+        self._skip_if_unavailable(provider)
         query = "Show me the gender breakdown of registered users as a pie chart."
-        result = run_query(query, provider="Groq")
+        result = run_query(query, provider=provider)
         assert_valid_response(result, query)
-
-        # Must have produced a chart
         chart_blocks = [b for b in result.display_blocks if b["type"] == "chart"]
         assert len(chart_blocks) >= 1, "Expected at least one chart block"
-
-        # Text must mention both genders
         text_lower = result.text.lower()
         assert "male" in text_lower or "female" in text_lower, f"Gender not mentioned in: {result.text}"
 
-    def test_q3_time_series_bar_chart(self):
-        """
-        Time-series query — logins grouped by month with a bar chart.
-        Tests: group_and_count(month) + create_bar_chart + dataframe block.
-        """
+    def test_q3_time_series_bar_chart(self, provider):
+        """Monthly login trend with a bar chart."""
+        self._skip_if_unavailable(provider)
         query = "How many logins were there each month? Show a bar chart."
-        result = run_query(query, provider="Groq")
+        result = run_query(query, provider=provider)
         assert_valid_response(result, query)
-
-        # Must have a chart
         chart_blocks = [b for b in result.display_blocks if b["type"] == "chart"]
         assert len(chart_blocks) >= 1, "Expected a bar chart for monthly logins"
-
-        # Must have called group_and_count
         assert "group_and_count" in result.tool_calls, (
             f"Expected group_and_count in tool calls, got: {result.tool_calls}"
         )
 
-    def test_q4_join_and_filter(self):
-        """
-        Cross-sheet join with multiple filters.
-        Tests: join_sheets + filter on both sheets + numerical result.
-        """
+    def test_q4_join_and_filter(self, provider):
+        """Cross-sheet join with multiple filters."""
+        self._skip_if_unavailable(provider)
         query = "How many male users visited on a Tuesday?"
-        result = run_query(query, provider="Groq")
+        result = run_query(query, provider=provider)
         assert_valid_response(result, query)
+        assert "join_sheets" in result.tool_calls, (
+            f"Expected join_sheets in tool calls, got: {result.tool_calls}"
+        )
 
-        # Must have joined the sheets
-        assert "join_sheets" in result.tool_calls, f"Expected join_sheets in tool calls, got: {result.tool_calls}"
-
-    def test_q5_language_breakdown_with_table(self):
-        """
-        Top-N categorical breakdown expecting a table and chart.
-        Tests: group_and_count(Primary Spoken Language) + dataframe block.
-        """
+    def test_q5_language_breakdown_with_table(self, provider):
+        """Top-N categorical breakdown expecting a table and chart."""
+        self._skip_if_unavailable(provider)
         query = "What are the top spoken languages among registered users? Show a chart."
-        result = run_query(query, provider="Groq")
+        result = run_query(query, provider=provider)
         assert_valid_response(result, query)
-
-        # Must have a dataframe or chart
         rich_blocks = [b for b in result.display_blocks if b["type"] in ("dataframe", "chart")]
         assert len(rich_blocks) >= 1, "Expected at least a table or chart for language breakdown"
-
-        # Must mention at least one real language from the data
         known_languages = ["english", "bengali", "arabic", "lithuanian", "somali"]
         text_lower = result.text.lower()
-        assert any(lang in text_lower for lang in known_languages), f"No known language mentioned in: {result.text}"
+        assert any(lang in text_lower for lang in known_languages), (
+            f"No known language mentioned in: {result.text}"
+        )

@@ -37,7 +37,7 @@ PROVIDERS: dict[str, dict] = {
     "Cerebras": {
         "base_url": "https://api.cerebras.ai/v1",
         "api_key_env": "CEREBRAS_API_KEY",
-        "model": "llama3.3-70b",
+        "model": "gpt-oss-120b",
     },
 }
 
@@ -292,7 +292,19 @@ def _loop(
         for tc in msg.tool_calls:
             tool_call_count += 1
             tool_names_called.append(tc.function.name)
-            args = json.loads(tc.function.arguments)
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError as exc:
+                # Model generated truncated/malformed JSON — feed error back so it can retry
+                log.warning("Malformed tool call JSON for %s: %s", tc.function.name, exc)
+                tool_responses.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps({"error": f"Your tool call arguments were malformed JSON and could not be parsed. Please retry with valid JSON arguments. Details: {exc}"}),
+                    }
+                )
+                continue
             result_str = _call_tool(tc.function.name, args)
             result_data = json.loads(result_str)
 

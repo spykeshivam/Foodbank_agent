@@ -52,6 +52,7 @@ jobs:
       - name: Run agent query tests
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           GOOGLE_CREDENTIALS_B64: ${{ secrets.GOOGLE_CREDENTIALS_B64 }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           LOGIN_SHEET_ID: ${{ secrets.LOGIN_SHEET_ID }}
