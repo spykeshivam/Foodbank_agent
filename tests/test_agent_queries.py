@@ -32,12 +32,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from agent import PROVIDERS, AgentResponse, run_query
 from config import CREDENTIALS_FILE
-from sheets import fetch_logins, fetch_registrations
 
-# ── Skip entire module if credentials missing ─────────────────────────────────
+# ── Skip entire module if credentials or env vars are missing ─────────────────
+# Guard the import — sheets.py reads SHEET_ID at module level and raises KeyError
+# if the env var isn't set, which would crash pytest collection before the skip runs.
+try:
+    from sheets import fetch_logins, fetch_registrations
+
+    _SHEETS_IMPORTABLE = True
+except Exception:
+    fetch_logins = fetch_registrations = None  # type: ignore[assignment]
+    _SHEETS_IMPORTABLE = False
+
 pytestmark = pytest.mark.skipif(
-    not os.path.exists(CREDENTIALS_FILE),
-    reason="credentials.json not found — skipping agent query tests",
+    not _SHEETS_IMPORTABLE or not os.path.exists(CREDENTIALS_FILE),
+    reason="credentials.json not found or SHEET_ID/LOGIN_SHEET_ID env vars not set — skipping agent query tests",
 )
 
 

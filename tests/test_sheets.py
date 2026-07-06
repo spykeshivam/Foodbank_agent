@@ -18,13 +18,20 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-# ── Skip entire module if credentials file is missing ─────────────────────────
+# ── Skip entire module if credentials or env vars are missing ─────────────────
 from config import CREDENTIALS_FILE
-from sheets import fetch_logins, fetch_registrations
+
+try:
+    from sheets import fetch_logins, fetch_registrations
+
+    _SHEETS_IMPORTABLE = True
+except Exception:
+    fetch_logins = fetch_registrations = None  # type: ignore[assignment]
+    _SHEETS_IMPORTABLE = False
 
 pytestmark = pytest.mark.skipif(
-    not os.path.exists(CREDENTIALS_FILE),
-    reason=f"credentials.json not found at {CREDENTIALS_FILE} — skipping sheet tests",
+    not _SHEETS_IMPORTABLE or not os.path.exists(CREDENTIALS_FILE),
+    reason="credentials.json not found or SHEET_ID/LOGIN_SHEET_ID env vars not set — skipping sheet tests",
 )
 
 # ── Fixtures — fetch once per session ─────────────────────────────────────────
