@@ -1,12 +1,19 @@
 """
-Core agentic loop — no Streamlit dependency.
+Code-generation agent — replaces the 10-tool agentic loop.
 
-app.py and tests both import from here.
+Flow (mirrors the PandasAI pattern):
+  user question
+    → build prompt with DataFrame schema (no raw data sent to LLM)
+    → LLM generates a pandas/plotly code snippet
+    → execute locally against the real DataFrames
+    → return result (number / table / chart) to Streamlit
 """
 
-import json
 import os
+import re
+import tempfile
 import time
+import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,20 +21,14 @@ from datetime import datetime
 import httpx
 import openai
 import pandas as pd
+import plotly.express as px
 
 from log_config import get_logger, setup_logging
-from tool_schemas import TOOL_SCHEMAS
-from tools import TOOL_FUNCTIONS
 
 setup_logging()
 log = get_logger(__name__)
 
-MAX_TOOL_CALLS = 10
-
-# Sliding window of API call timestamps for rate tracking
-_api_call_times: deque[float] = deque()
-_RATE_WINDOW = 300  # 5 minutes in seconds
-
+# ── Provider config ───────────────────────────────────────────────────────────
 PROVIDERS: dict[str, dict] = {
     "Groq": {
         "base_url": "https://api.groq.com/openai/v1",
@@ -37,33 +38,26 @@ PROVIDERS: dict[str, dict] = {
     "Cerebras": {
         "base_url": "https://api.cerebras.ai/v1",
         "api_key_env": "CEREBRAS_API_KEY",
-        "model": "gpt-oss-120b",
+        "model": "llama3.3-70b",
     },
 }
 
-SYSTEM_PROMPT = """You are a data analyst assistant for a foodbank called St Dunstan's Food Bank.
-You have access to two datasets:
-- registrations (one row per registered user) — key columns include:
-  Username, First Name, Surname, Date of Birth, Sex, Postcode, Primary Spoken Language,
-  Dietary Requirements, Ethnicity, Relationship Status, Property Type,
-  Number of Adults in Household, Number of Children in Household,
-  Number of children in each age range [Under 5 / 5-11 / 11-16 / 16-18],
-  Number of people on Benefits [Universal credit / Benefits / Unemployed / Retired /
-  Minimum wage / Over £25K / Under £25K / Pension], Cooking Facilities, Timestamp.
-- logins (one row per visit) — columns: Username, Timestamp, Day.
+MAX_CODE_RETRIES = 2  # re-ask LLM to fix broken code this many times
 
-The two datasets join on Username.
-
-IMPORTANT — when NOT to call tools:
-- Greetings, small talk, or messages that are not data questions (e.g. "Hi", "Hello", "Thanks"): respond directly in plain text, do not call any tool.
-- Only call clarify_question when a genuine data query is ambiguous (e.g. a time period is missing). Never call it for greetings or non-data messages.
-
-Always use tools to retrieve real data — never guess or invent numbers.
-For every data question, always include at least one numerical result and, where meaningful, at least one chart.
-When creating charts, pass the 'data' array from group_and_count serialised as a JSON string.
-Be concise and empathetic in tone — remember these results reflect real people in need."""
+_api_call_times: deque[float] = deque()
+_RATE_WINDOW = 300
 
 
+# ── Response dataclass ────────────────────────────────────────────────────────
+@dataclass
+class AgentResponse:
+    text: str  # natural-language answer (may be empty if chart/table speaks for itself)
+    display_blocks: list[dict]  # [{type: text|dataframe|chart, ...}] for Streamlit
+    history: list = field(default_factory=list)  # conversation turns — persist in session
+    error: str | None = None  # set if all retries failed
+
+
+# ── LLM client helpers ────────────────────────────────────────────────────────
 def _record_api_call() -> None:
     now = time.monotonic()
     _api_call_times.append(now)
@@ -73,364 +67,265 @@ def _record_api_call() -> None:
     log.info("API requests in last 5 min: %d", len(_api_call_times))
 
 
-@dataclass
-class AgentResponse:
-    """Structured result returned by run_query() and continue_after_clarification()."""
-
-    text: str  # final natural-language answer
-    tool_calls: list[str]  # ordered list of tool names called
-    display_blocks: list[dict]  # [{type, ...}] ready for rendering
-    clarification_question: str | None  # non-None if agent paused to clarify
-    history: list = field(default_factory=list)  # conversation turns (no system msg) — persist in session
-
-    # ── Internal resume state (populated only when clarification_question is set) ──
-    _paused_messages: list = field(default_factory=list)
-    _paused_tool_call_id: str = ""  # OpenAI tool_call id of the clarify_question call
-    _paused_collected: list = field(default_factory=list)
-    _paused_tool_call_count: int = 0
-
-
 def _build_client(provider: str) -> tuple[openai.OpenAI, str]:
     cfg = PROVIDERS[provider]
-    client = openai.OpenAI(
+    return openai.OpenAI(
         base_url=cfg["base_url"],
         api_key=os.environ[cfg["api_key_env"]],
-    )
-    return client, cfg["model"]
+    ), cfg["model"]
 
 
-def _build_tools() -> list[dict]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": s["name"],
-                "description": s["description"],
-                "parameters": s["parameters"],
-            },
-        }
-        for s in TOOL_SCHEMAS
-    ]
-
-
-def _build_system_message() -> dict:
-    today = datetime.now().strftime("%A, %d %B %Y")
-    content = (
-        f"The current date is {today}. "
-        "This is injected at runtime and is always accurate — "
-        "do not rely on your training cutoff to infer what 'now', 'recent', or 'this year' means.\n\n" + SYSTEM_PROMPT
-    )
-    return {"role": "system", "content": content}
-
-
-def _generate_with_retry(client, model, messages, tools, max_retries=5, on_retry=None):
-    """Call chat.completions.create with linear 40s backoff on 429 and fixed retry on 5xx."""
-    rate_limit_attempts = 0
-    attempt_total = 0
+def _call_llm(
+    client: openai.OpenAI,
+    model: str,
+    messages: list,
+    on_retry=None,
+    max_retries: int = 5,
+) -> str:
+    """Call the LLM and return the response text. Retries on rate limits and server errors."""
+    attempts = 0
     while True:
-        attempt_total += 1
-        log.debug("API call attempt %d (model=%s, messages=%d)", attempt_total, model, len(messages))
+        attempts += 1
         try:
             _record_api_call()
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=tools,
-                tool_choice="auto",
-                parallel_tool_calls=False,
-                temperature=0.2,
-                timeout=600,
+                temperature=0.1,
+                timeout=120,
             )
             u = response.usage
-            log.info(
-                "Tokens — prompt: %d, output: %d, total: %d",
-                u.prompt_tokens or 0,
-                u.completion_tokens or 0,
-                u.total_tokens or 0,
-            )
-            return response
+            log.info("Tokens — prompt: %d, output: %d", u.prompt_tokens, u.completion_tokens)
+            return response.choices[0].message.content
         except openai.RateLimitError:
-            rate_limit_attempts += 1
-            log.warning("429 rate-limit hit (attempt %d/%d) — waiting 40s", rate_limit_attempts, max_retries)
-            if rate_limit_attempts >= max_retries:
-                log.error("429 rate-limit: max retries exceeded")
+            log.warning("429 rate-limit (attempt %d/%d) — waiting 40s", attempts, max_retries)
+            if attempts >= max_retries:
                 raise
             time.sleep(40)
         except openai.APIStatusError as e:
             if e.status_code in (503, 504):
-                rate_limit_attempts += 1
-                log.warning(
-                    "APIStatusError %d (attempt %d/%d) — retrying in 5s",
-                    e.status_code,
-                    rate_limit_attempts,
-                    max_retries,
-                )
-                if rate_limit_attempts >= max_retries:
-                    log.error("APIStatusError %d: max retries exceeded", e.status_code)
+                log.warning("APIStatusError %d (attempt %d/%d) — retrying in 5s", e.status_code, attempts, max_retries)
+                if attempts >= max_retries:
                     raise
                 if on_retry:
                     on_retry()
                 time.sleep(5)
             else:
-                log.error("APIStatusError %d: %s", e.status_code, e)
                 raise
-        except httpx.TimeoutException as e:
-            rate_limit_attempts += 1
-            log.warning("httpx.%s (attempt %d/%d) — retrying in 5s", type(e).__name__, rate_limit_attempts, max_retries)
-            if rate_limit_attempts >= max_retries:
-                log.error("httpx timeout: max retries exceeded")
+        except httpx.TimeoutException:
+            log.warning("Timeout (attempt %d/%d) — retrying in 5s", attempts, max_retries)
+            if attempts >= max_retries:
                 raise
             if on_retry:
                 on_retry()
             time.sleep(5)
 
 
-def _call_tool(tool_name: str, tool_input: dict) -> str:
-    fn = TOOL_FUNCTIONS.get(tool_name)
-    if fn is None:
-        log.error("Unknown tool requested: %s", tool_name)
-        return json.dumps({"error": f"Unknown tool: {tool_name}"})
-    log.info("Tool call → %s | args: %s", tool_name, list(tool_input.keys()))
-    try:
-        result = fn(**tool_input)
-        preview = result[:200] + "…" if len(result) > 200 else result
-        log.debug("Tool result ← %s | %s", tool_name, preview)
-        return result
-    except Exception as exc:
-        log.error("Tool %s raised: %s", tool_name, exc, exc_info=True)
-        return json.dumps({"error": str(exc)})
+# ── Prompt construction ───────────────────────────────────────────────────────
+def _schema_block(df: pd.DataFrame, name: str) -> str:
+    """Compact schema: shape + columns with dtypes + 3 sample rows."""
+    col_info = "\n".join(f"  - {col}: {df[col].dtype}" for col in df.columns)
+    sample = df.head(3).to_string(index=False)
+    return f"{name} ({len(df):,} rows)\nColumns:\n{col_info}\nSample:\n{sample}"
 
 
-def _finalize(text_parts: list[str], collected: list[dict]) -> tuple[str, list[dict]]:
-    text = "\n\n".join(t for t in text_parts if t)
-    display_blocks = []
-    if text:
-        display_blocks.append({"type": "text", "text": text})
-    for item in collected:
-        if item["name"] == "group_and_count" and "data" in item["result"]:
-            display_blocks.append(
-                {
-                    "type": "dataframe",
-                    "data": pd.DataFrame(item["result"]["data"]),
-                }
-            )
-    for item in collected:
-        if "chart_path" in item["result"]:
-            display_blocks.append({"type": "chart", "path": item["result"]["chart_path"]})
-    return text, display_blocks
+_SYSTEM_TEMPLATE = """\
+You are a data analyst for St Dunstan's Food Bank. Today is {today}.
+
+You have two pandas DataFrames already loaded in memory:
+
+{reg_schema}
+
+{login_schema}
+
+The two DataFrames join on the "Username" column.
+
+YOUR JOB: Write a single Python code block to answer the user's question.
+
+RULES:
+- Available variables: `registrations`, `logins`, `pd` (pandas), `px` (plotly.express)
+- Do NOT import anything — everything is already available
+- Do NOT use print()
+- For a number or text answer: assign a descriptive sentence to `result`
+  e.g.  result = f"{{count}} people have Halal dietary requirements"
+- For a chart: assign a Plotly figure to `fig`
+- For a table: assign a DataFrame to `result`
+- You may set both `result` and `fig` when useful
+- Return ONLY a ```python code block — no explanation outside it
+
+EXAMPLES:
+
+Q: How many women are registered?
+```python
+count = len(registrations[registrations["Sex"].str.strip().str.lower() == "female"])
+result = f"{{count}} women are registered."
+```
+
+Q: Show logins per month as a bar chart.
+```python
+logins["Month"] = pd.to_datetime(logins["Timestamp"]).dt.to_period("M").astype(str)
+monthly = logins.groupby("Month").size().reset_index(name="Logins")
+fig = px.bar(monthly, x="Month", y="Logins", title="Logins per Month")
+result = monthly
+```
+
+Q: What are the top 5 spoken languages?
+```python
+top = registrations["Primary Spoken Language"].value_counts().head(5).reset_index()
+top.columns = ["Language", "Count"]
+fig = px.bar(top, x="Language", y="Count", title="Top 5 Spoken Languages")
+result = top
+```\
+"""
 
 
-def _loop(
-    client,
-    model: str,
-    tools: list,
-    messages: list,
-    tool_call_count: int,
-    collected: list[dict],
-    tool_names_called: list[str],
-    on_retry=None,
-) -> AgentResponse:
-    """
-    Inner loop shared by run_query() and continue_after_clarification().
-    Mutates messages, collected, and tool_names_called in place.
-    """
-    log.debug("_loop start | tool_call_count=%d, history_len=%d", tool_call_count, len(messages))
-    text_parts: list[str] = []
-
-    while tool_call_count < MAX_TOOL_CALLS:
-        log.debug("Sending to model (tool_calls_so_far=%d)", tool_call_count)
-        response = _generate_with_retry(client, model, messages, tools, on_retry=on_retry)
-
-        msg = response.choices[0].message
-
-        # Accumulate any text the model emits (usually only on the final turn)
-        if msg.content:
-            text_parts.append(msg.content)
-
-        # Serialise assistant message back into the history
-        assistant_entry: dict = {"role": "assistant", "content": msg.content}
-        if msg.tool_calls:
-            assistant_entry["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                }
-                for tc in msg.tool_calls
-            ]
-        messages.append(assistant_entry)
-
-        log.debug(
-            "Model response: content=%s, tool_calls=%s",
-            bool(msg.content),
-            [tc.function.name for tc in msg.tool_calls] if msg.tool_calls else [],
-        )
-
-        if not msg.tool_calls:
-            text, display_blocks = _finalize(text_parts, collected)
-            log.info(
-                "Loop complete | tools_called=%s | display_blocks=%d | text_len=%d",
-                tool_names_called,
-                len(display_blocks),
-                len(text),
-            )
-            # Strip system message from history before handing back to session
-            conversation = [m for m in messages if m.get("role") != "system"]
-            return AgentResponse(
-                text=text,
-                tool_calls=tool_names_called,
-                display_blocks=display_blocks,
-                clarification_question=None,
-                history=conversation,
-            )
-
-        # ── Process tool calls ────────────────────────────────────────────────
-        tool_responses: list[dict] = []
-        clarify_call = None
-        clarify_question_text = ""
-
-        for tc in msg.tool_calls:
-            tool_call_count += 1
-            tool_names_called.append(tc.function.name)
-            try:
-                args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError as exc:
-                # Model generated truncated/malformed JSON — feed error back so it can retry
-                log.warning("Malformed tool call JSON for %s: %s", tc.function.name, exc)
-                tool_responses.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": json.dumps({"error": f"Your tool call arguments were malformed JSON and could not be parsed. Please retry with valid JSON arguments. Details: {exc}"}),
-                    }
-                )
-                continue
-            result_str = _call_tool(tc.function.name, args)
-            result_data = json.loads(result_str)
-
-            if tc.function.name == "clarify_question" and result_data.get("clarification_needed"):
-                # Capture and handle after processing remaining calls in the batch
-                clarify_call = tc
-                clarify_question_text = result_data["question"]
-            else:
-                tool_responses.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result_str,
-                    }
-                )
-                collected.append({"name": tc.function.name, "result": result_data})
-
-        if clarify_call:
-            # Add responses for any non-clarify tools in the same batch first
-            messages.extend(tool_responses)
-            log.info("Loop paused for clarification: %s", clarify_question_text)
-            conversation = [m for m in messages if m.get("role") != "system"]
-            return AgentResponse(
-                text="",
-                tool_calls=tool_names_called,
-                display_blocks=[],
-                clarification_question=clarify_question_text,
-                history=conversation,
-                _paused_messages=list(messages),
-                _paused_tool_call_id=clarify_call.id,
-                _paused_collected=list(collected),
-                _paused_tool_call_count=tool_call_count,
-            )
-
-        messages.extend(tool_responses)
-
-    # Hit tool cap — force a final answer
-    log.warning("Tool call cap (%d) reached — forcing final answer", MAX_TOOL_CALLS)
-    messages.append({"role": "user", "content": "Please provide a final answer now."})
-    response = _generate_with_retry(client, model, messages, tools, on_retry=on_retry)
-    msg = response.choices[0].message
-    if msg.content:
-        text_parts.append(msg.content)
-    text, display_blocks = _finalize(text_parts, collected)
-    conversation = [m for m in messages if m.get("role") != "system"]
-    return AgentResponse(
-        text=text,
-        tool_calls=tool_names_called,
-        display_blocks=display_blocks,
-        clarification_question=None,
-        history=conversation,
+def _build_messages(
+    question: str,
+    registrations: pd.DataFrame,
+    logins: pd.DataFrame,
+    history: list,
+    error_feedback: str | None = None,
+) -> list[dict]:
+    today = datetime.now().strftime("%A, %d %B %Y")
+    system_content = _SYSTEM_TEMPLATE.format(
+        today=today,
+        reg_schema=_schema_block(registrations, "registrations"),
+        login_schema=_schema_block(logins, "logins"),
     )
+    messages = [{"role": "system", "content": system_content}]
+    messages.extend(history)
+
+    if error_feedback:
+        user_content = f"{question}\n\nYour previous code raised an error — please fix it:\n```\n{error_feedback}\n```"
+    else:
+        user_content = question
+
+    messages.append({"role": "user", "content": user_content})
+    return messages
 
 
+# ── Code extraction & execution ───────────────────────────────────────────────
+def _extract_code(text: str) -> str:
+    """Pull the Python code block out of the LLM response."""
+    match = re.search(r"```python\s*(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"```\s*(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return text.strip()
+
+
+def _execute(
+    code: str,
+    registrations: pd.DataFrame,
+    logins: pd.DataFrame,
+) -> tuple[dict, str | None]:
+    """
+    Run code in a restricted namespace.
+    Returns ({result, fig}, error_traceback_or_None).
+    """
+    namespace = {
+        "pd": pd,
+        "px": px,
+        "registrations": registrations.copy(),
+        "logins": logins.copy(),
+    }
+    try:
+        exec(code, namespace)  # noqa: S102
+        return {k: namespace[k] for k in ("result", "fig") if k in namespace and namespace[k] is not None}, None
+    except Exception:
+        return {}, traceback.format_exc()
+
+
+# ── Result → display blocks ───────────────────────────────────────────────────
+def _to_display_blocks(output: dict) -> tuple[str, list[dict]]:
+    blocks: list[dict] = []
+    text = ""
+
+    result = output.get("result")
+    fig = output.get("fig")
+
+    if result is not None:
+        if isinstance(result, pd.DataFrame) and not result.empty:
+            blocks.append({"type": "dataframe", "data": result})
+        else:
+            text = str(result)
+            blocks.append({"type": "text", "text": text})
+
+    if fig is not None:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            path = tmp.name
+        fig.write_json(path)
+        blocks.append({"type": "chart", "path": path})
+
+    return text, blocks
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 def run_query(
-    user_text: str,
+    question: str,
+    registrations: pd.DataFrame,
+    logins: pd.DataFrame,
     history: list | None = None,
     provider: str = "Groq",
     on_retry=None,
 ) -> AgentResponse:
     """
-    Start a new agentic loop for a user query.
+    Answer a natural-language question about the two DataFrames.
 
     Parameters
     ----------
-    user_text : str
-        The user's question.
-    history : list | None
-        Prior conversation turn dicts (no system message) from previous turns.
-        Persist AgentResponse.history back to session state after each call.
-    provider : str
-        "Groq" or "Cerebras".
+    question      : user's question in plain English
+    registrations : registrations DataFrame
+    logins        : logins DataFrame
+    history       : prior conversation turns (no system message) — pass back
+                    AgentResponse.history after each call for multi-turn context
+    provider      : "Groq" or "Cerebras"
+    on_retry      : optional callback shown to user when server is busy
     """
-    log.info("run_query | provider=%s | history_len=%d | query=%r", provider, len(history or []), user_text[:120])
+    log.info("run_query | provider=%s | question=%r", provider, question[:120])
     client, model = _build_client(provider)
-    tools = _build_tools()
+    history = list(history or [])
+    error_feedback: str | None = None
 
-    messages: list = [_build_system_message()]
-    messages.extend(history or [])
-    messages.append({"role": "user", "content": user_text})
+    for attempt in range(MAX_CODE_RETRIES + 1):
+        messages = _build_messages(question, registrations, logins, history, error_feedback)
+        response_text = _call_llm(client, model, messages, on_retry=on_retry)
+        log.debug("LLM raw response (attempt %d):\n%s", attempt + 1, response_text)
 
-    return _loop(client, model, tools, messages, 0, [], [], on_retry=on_retry)
+        code = _extract_code(response_text)
+        log.info("Executing code (attempt %d):\n%s", attempt + 1, code)
 
+        output, error = _execute(code, registrations, logins)
 
-def continue_after_clarification(
-    user_answer: str,
-    paused: AgentResponse,
-    provider: str = "Groq",
-    on_retry=None,
-) -> AgentResponse:
-    """
-    Resume the agentic loop after the user has answered a clarification question.
+        if error:
+            log.warning("Code error (attempt %d/%d):\n%s", attempt + 1, MAX_CODE_RETRIES + 1, error)
+            error_feedback = error
+            continue
 
-    The user's answer is injected as a tool response for the paused
-    clarify_question call — the model receives full context and continues
-    from exactly where it left off.
+        if not output:
+            log.warning("Code ran but produced no result or fig (attempt %d)", attempt + 1)
+            error_feedback = (
+                "The code ran without errors but did not assign anything to `result` or `fig`. Please fix it."
+            )
+            continue
 
-    Parameters
-    ----------
-    user_answer : str
-        What the user typed in response to the clarification question.
-    paused : AgentResponse
-        The AgentResponse that had clarification_question set.
-    provider : str
-        "Groq" or "Cerebras". Can differ from the provider that asked the question.
-    """
-    log.info("continue_after_clarification | provider=%s | answer=%r", provider, user_answer[:120])
-    client, model = _build_client(provider)
-    tools = _build_tools()
+        # ── Success ───────────────────────────────────────────────────────────
+        text, display_blocks = _to_display_blocks(output)
 
-    messages = list(paused._paused_messages)
-    messages.append(
-        {
-            "role": "tool",
-            "tool_call_id": paused._paused_tool_call_id,
-            "content": json.dumps({"user_answer": user_answer}),
-        }
-    )
+        new_history = list(history)
+        new_history.append({"role": "user", "content": question})
+        new_history.append({"role": "assistant", "content": response_text})
 
-    return _loop(
-        client,
-        model,
-        tools,
-        messages,
-        paused._paused_tool_call_count,
-        list(paused._paused_collected),
-        list(paused.tool_calls),
-        on_retry=on_retry,
+        log.info("run_query success | blocks=%d | text=%r", len(display_blocks), text[:80])
+        return AgentResponse(text=text, display_blocks=display_blocks, history=new_history)
+
+    # ── All retries exhausted ─────────────────────────────────────────────────
+    log.error("run_query failed after %d attempts", MAX_CODE_RETRIES + 1)
+    return AgentResponse(
+        text="",
+        display_blocks=[],
+        history=history,
+        error=f"Could not produce a valid answer after {MAX_CODE_RETRIES + 1} attempts.\n\n{error_feedback}",
     )

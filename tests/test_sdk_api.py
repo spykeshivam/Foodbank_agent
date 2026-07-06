@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from agent import PROVIDERS, _build_client, _build_tools, _generate_with_retry
+from agent import PROVIDERS, _build_client, _call_llm
 
 # ── PROVIDERS config ──────────────────────────────────────────────────────────
 
@@ -38,7 +38,7 @@ class TestProviders:
         assert PROVIDERS["Groq"]["model"] == "llama-3.3-70b-versatile"
 
     def test_cerebras_model(self):
-        assert PROVIDERS["Cerebras"]["model"] == "gpt-oss-120b"
+        assert PROVIDERS["Cerebras"]["model"] == "llama3.3-70b"
 
 
 # ── openai SDK attributes we use in agent.py ─────────────────────────────────
@@ -66,64 +66,8 @@ class TestOpenAIAttributes:
     def test_create_signature_has_required_params(self):
         client = openai.OpenAI(base_url="https://example.com", api_key="dummy")
         sig = inspect.signature(client.chat.completions.create)
-        for param in ("model", "messages", "tools", "tool_choice", "temperature"):
+        for param in ("model", "messages", "temperature"):
             assert param in sig.parameters, f"create() missing param: {param}"
-
-    def test_parallel_tool_calls_param_exists(self):
-        client = openai.OpenAI(base_url="https://example.com", api_key="dummy")
-        sig = inspect.signature(client.chat.completions.create)
-        assert "parallel_tool_calls" in sig.parameters
-
-
-# ── _build_tools schema ───────────────────────────────────────────────────────
-
-
-class TestBuildTools:
-    def test_returns_list(self):
-        assert isinstance(_build_tools(), list)
-
-    def test_each_tool_has_type_function(self):
-        for t in _build_tools():
-            assert t["type"] == "function"
-
-    def test_each_tool_has_name_description_parameters(self):
-        for t in _build_tools():
-            fn = t["function"]
-            assert "name" in fn
-            assert "description" in fn
-            assert "parameters" in fn
-
-    def test_expected_tool_names_present(self):
-        names = {t["function"]["name"] for t in _build_tools()}
-        for expected in (
-            "clarify_question",
-            "filter_registrations",
-            "filter_logins",
-            "join_sheets",
-            "group_and_count",
-            "create_bar_chart",
-            "create_line_chart",
-            "create_pie_chart",
-            "summarise_dataframe",
-            "get_column_values",
-        ):
-            assert expected in names, f"Tool {expected!r} missing from _build_tools()"
-
-    def test_months_back_allows_null_in_schema(self):
-        # Groq rejects months_back=null if the schema only lists "integer".
-        # Ensure all tools with months_back declare ["integer", "null"].
-        tools_with_months_back = ("filter_logins", "join_sheets", "group_and_count")
-        for t in _build_tools():
-            name = t["function"]["name"]
-            if name not in tools_with_months_back:
-                continue
-            props = t["function"]["parameters"]["properties"]
-            assert "months_back" in props, f"{name} missing months_back property"
-            mb_type = props["months_back"]["type"]
-            assert "null" in mb_type, (
-                f"{name}.months_back schema must include 'null' to prevent Groq 400 "
-                f"when the model passes months_back=null. Got: {mb_type!r}"
-            )
 
 
 # ── _build_client ─────────────────────────────────────────────────────────────
@@ -140,7 +84,7 @@ class TestBuildClient:
         monkeypatch.setenv("CEREBRAS_API_KEY", "test-key")
         client, model = _build_client("Cerebras")
         assert isinstance(client, openai.OpenAI)
-        assert model == "gpt-oss-120b"
+        assert model == "llama3.3-70b"
 
     def test_unknown_provider_raises(self):
         with pytest.raises(KeyError):
@@ -166,10 +110,10 @@ class TestErrorClasses:
         assert issubclass(httpx.ReadTimeout, httpx.TimeoutException)
 
 
-# ── _generate_with_retry ──────────────────────────────────────────────────────
+# ── _call_llm ─────────────────────────────────────────────────────────────────
 
 
-class TestGenerateWithRetry:
+class TestCallLlm:
     def _mock_client(self, side_effect):
         client = MagicMock()
         client.chat.completions.create.side_effect = side_effect
@@ -178,17 +122,16 @@ class TestGenerateWithRetry:
     def test_rate_limit_retries_and_raises(self):
         client = self._mock_client(openai.RateLimitError("rate limited", response=MagicMock(status_code=429), body={}))
         with patch("agent.time.sleep"), pytest.raises(openai.RateLimitError):
-            _generate_with_retry(client, "model", [], [], max_retries=3)
+            _call_llm(client, "model", [], max_retries=3)
         assert client.chat.completions.create.call_count == 3
 
     def test_httpx_timeout_retries_and_raises(self):
         client = self._mock_client(httpx.ReadTimeout("timed out"))
         on_retry_calls = []
         with patch("agent.time.sleep"), pytest.raises(httpx.ReadTimeout):
-            _generate_with_retry(
+            _call_llm(
                 client,
                 "model",
-                [],
                 [],
                 max_retries=3,
                 on_retry=lambda: on_retry_calls.append(1),
@@ -198,9 +141,9 @@ class TestGenerateWithRetry:
 
     def test_success_on_second_attempt(self):
         fake_response = MagicMock()
+        fake_response.choices[0].message.content = "```python\nresult = 'hello'\n```"
         fake_response.usage.prompt_tokens = 10
         fake_response.usage.completion_tokens = 5
-        fake_response.usage.total_tokens = 15
         client = self._mock_client(
             [
                 httpx.ReadTimeout("timed out"),
@@ -208,8 +151,8 @@ class TestGenerateWithRetry:
             ]
         )
         with patch("agent.time.sleep"):
-            result = _generate_with_retry(client, "model", [], [], max_retries=3)
-        assert result is fake_response
+            result = _call_llm(client, "model", [], max_retries=3)
+        assert result == "```python\nresult = 'hello'\n```"
 
     def test_503_retries(self):
         err = openai.APIStatusError(
@@ -219,7 +162,7 @@ class TestGenerateWithRetry:
         )
         client = self._mock_client(err)
         with patch("agent.time.sleep"), pytest.raises(openai.APIStatusError):
-            _generate_with_retry(client, "model", [], [], max_retries=2)
+            _call_llm(client, "model", [], max_retries=2)
         assert client.chat.completions.create.call_count == 2
 
     def test_400_does_not_retry(self):
@@ -230,5 +173,5 @@ class TestGenerateWithRetry:
         )
         client = self._mock_client(err)
         with pytest.raises(openai.APIStatusError):
-            _generate_with_retry(client, "model", [], [], max_retries=3)
+            _call_llm(client, "model", [], max_retries=3)
         assert client.chat.completions.create.call_count == 1

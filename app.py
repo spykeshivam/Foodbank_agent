@@ -7,10 +7,9 @@ import pandas as pd
 import plotly.io as pio
 import streamlit as st
 
-from agent import PROVIDERS, AgentResponse, continue_after_clarification, run_query
+from agent import PROVIDERS, AgentResponse, run_query
 from log_config import get_logger, setup_logging
 from sheets import fetch_logins, fetch_registrations
-from tools import init_datasets
 
 setup_logging()
 log = get_logger(__name__)
@@ -59,16 +58,13 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 registrations_df, logins_df = load_data()
-init_datasets(registrations_df, logins_df)
 log.info("App started — registrations: %d rows, logins: %d rows", len(registrations_df), len(logins_df))
 
 # ── Session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
-    st.session_state.messages = []  # display history [{role, content}]
+    st.session_state.messages = []
 if "api_history" not in st.session_state:
-    st.session_state.api_history = []  # Gemini Content objects
-if "pending_clarification" not in st.session_state:
-    st.session_state.pending_clarification = None  # paused AgentResponse or None
+    st.session_state.api_history = []
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -95,17 +91,15 @@ def render_message(role: str, content) -> None:
 
 
 def handle_response(result: AgentResponse) -> None:
-    st.session_state.api_history = result.history  # persist multi-turn context
-    if result.clarification_question:
-        st.session_state.pending_clarification = result  # store full paused state
+    st.session_state.api_history = result.history
+    if result.error:
         st.session_state.messages.append(
             {
                 "role": "assistant",
-                "content": [{"type": "text", "text": result.clarification_question}],
+                "content": [{"type": "text", "text": f"⚠️ {result.error}"}],
             }
         )
     else:
-        st.session_state.pending_clarification = None
         st.session_state.messages.append(
             {
                 "role": "assistant",
@@ -145,17 +139,12 @@ with st.sidebar:
     if st.button("Clear conversation", use_container_width=True):
         st.session_state.messages = []
         st.session_state.api_history = []
-        st.session_state.pending_clarification = None
         st.rerun()
 
 for msg in st.session_state.messages:
     render_message(msg["role"], msg["content"])
 
-placeholder = (
-    "Answer the clarification above…"
-    if st.session_state.pending_clarification
-    else "Ask a question about your foodbank data…"
-)
+placeholder = "Ask a question about your foodbank data…"
 
 user_input = st.chat_input(placeholder)
 
@@ -171,29 +160,21 @@ if user_input:
 
     try:
         with st.spinner("Thinking…"):
-            if st.session_state.pending_clarification is not None:
-                log.info("User answered clarification: %r", user_input[:120])
-                result = continue_after_clarification(
-                    user_input,
-                    st.session_state.pending_clarification,
-                    provider=st.session_state.provider,
-                    on_retry=_on_retry,
-                )
-            else:
-                log.info("New user query: %r", user_input[:120])
-                result = run_query(
-                    user_input,
-                    history=st.session_state.api_history,
-                    provider=st.session_state.provider,
-                    on_retry=_on_retry,
-                )
+            log.info("User query: %r", user_input[:120])
+            result = run_query(
+                user_input,
+                registrations_df,
+                logins_df,
+                history=st.session_state.api_history,
+                provider=st.session_state.provider,
+                on_retry=_on_retry,
+            )
 
         _retry_msg.empty()
         log.info(
-            "Response ready — clarification=%s, display_blocks=%d, tools=%s",
-            result.clarification_question is not None,
+            "Response ready — error=%s, display_blocks=%d",
+            result.error is not None,
             len(result.display_blocks),
-            result.tool_calls,
         )
         handle_response(result)
 
