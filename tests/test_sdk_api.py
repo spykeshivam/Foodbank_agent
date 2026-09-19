@@ -35,7 +35,7 @@ class TestProviders:
             assert "model" in cfg, f"{name} missing model"
 
     def test_groq_model(self):
-        assert PROVIDERS["Groq"]["model"] == "llama-3.3-70b-versatile"
+        assert PROVIDERS["Groq"]["model"] == "meta-llama/llama-4-maverick-17b-128e-instruct"
 
     def test_cerebras_model(self):
         assert PROVIDERS["Cerebras"]["model"] == "llama3.3-70b"
@@ -78,7 +78,7 @@ class TestBuildClient:
         monkeypatch.setenv("GROQ_API_KEY", "test-key")
         client, model = _build_client("Groq")
         assert isinstance(client, openai.OpenAI)
-        assert model == "llama-3.3-70b-versatile"
+        assert model == "meta-llama/llama-4-maverick-17b-128e-instruct"
 
     def test_cerebras_returns_client_and_model(self, monkeypatch):
         monkeypatch.setenv("CEREBRAS_API_KEY", "test-key")
