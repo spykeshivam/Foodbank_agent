@@ -38,7 +38,7 @@ class TestProviders:
         assert PROVIDERS["Groq"]["model"] == "meta-llama/llama-4-maverick-17b-128e-instruct"
 
     def test_cerebras_model(self):
-        assert PROVIDERS["Cerebras"]["model"] == "llama3.3-70b"
+        assert PROVIDERS["Cerebras"]["model"] == "openai/gpt-oss-120b"
 
 
 # ── openai SDK attributes we use in agent.py ─────────────────────────────────
@@ -84,7 +84,7 @@ class TestBuildClient:
         monkeypatch.setenv("CEREBRAS_API_KEY", "test-key")
         client, model = _build_client("Cerebras")
         assert isinstance(client, openai.OpenAI)
-        assert model == "llama3.3-70b"
+        assert model == "openai/gpt-oss-120b"
 
     def test_unknown_provider_raises(self):
         with pytest.raises(KeyError):

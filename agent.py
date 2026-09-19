@@ -38,7 +38,7 @@ PROVIDERS: dict[str, dict] = {
     "Cerebras": {
         "base_url": "https://api.cerebras.ai/v1",
         "api_key_env": "CEREBRAS_API_KEY",
-        "model": "llama3.3-70b",
+        "model": "openai/gpt-oss-120b",
     },
 }
 
