@@ -2,7 +2,7 @@ name: Tests
 
 on:
   push:
-    branches: [master]
+    branches: [master, pandas-code-gen]
   pull_request:
     branches: [master]
   workflow_dispatch:
