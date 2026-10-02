@@ -37,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: uv sync
       - name: Run SDK tests
-        run: uv run pytest tests/test_sdk_api.py -v
+        run: uv run pytest tests/test_sdk_api.py tests/test_agent_unit.py -v
 
   integration-tests:
     name: Integration tests (API keys + Sheets)
