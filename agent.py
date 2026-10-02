@@ -33,12 +33,12 @@ PROVIDERS: dict[str, dict] = {
     "Groq": {
         "base_url": "https://api.groq.com/openai/v1",
         "api_key_env": "GROQ_API_KEY",
-        "model": "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "model": "llama-3.3-70b-versatile",
     },
     "Cerebras": {
         "base_url": "https://api.cerebras.ai/v1",
         "api_key_env": "CEREBRAS_API_KEY",
-        "model": "openai/gpt-oss-120b",
+        "model": "llama3.3-70b",
     },
 }
 

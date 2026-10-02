@@ -19,25 +19,29 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from agent import _execute, _extract_code, _to_display_blocks
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture()
 def small_reg() -> pd.DataFrame:
-    return pd.DataFrame({
-        "Username": ["alice", "bob"],
-        "Sex": ["Female", "Male"],
-        "Primary Spoken Language": ["English", "Bengali"],
-    })
+    return pd.DataFrame(
+        {
+            "Username": ["alice", "bob"],
+            "Sex": ["Female", "Male"],
+            "Primary Spoken Language": ["English", "Bengali"],
+        }
+    )
 
 
 @pytest.fixture()
 def small_logins() -> pd.DataFrame:
-    return pd.DataFrame({
-        "Username": ["alice", "alice", "bob"],
-        "Timestamp": ["2024-01-05 10:00", "2024-02-10 11:00", "2024-01-20 09:00"],
-        "Day": ["Friday", "Saturday", "Saturday"],
-    })
+    return pd.DataFrame(
+        {
+            "Username": ["alice", "alice", "bob"],
+            "Timestamp": ["2024-01-05 10:00", "2024-02-10 11:00", "2024-01-20 09:00"],
+            "Day": ["Friday", "Saturday", "Saturday"],
+        }
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -104,10 +108,7 @@ class TestExecute:
         assert "fig" in output
 
     def test_both_result_and_fig(self, small_reg, small_logins):
-        code = (
-            "result = 'chart below'\n"
-            "fig = px.bar(registrations, x='Username', y='Username')"
-        )
+        code = "result = 'chart below'\nfig = px.bar(registrations, x='Username', y='Username')"
         output, error = _execute(code, small_reg, small_logins)
         assert error is None
         assert "result" in output
@@ -130,10 +131,7 @@ class TestExecute:
         assert "new_col" not in small_reg.columns
 
     def test_can_use_pd_and_px(self, small_reg, small_logins):
-        code = (
-            "df = pd.DataFrame({'a': [1, 2]})\n"
-            "result = len(df)"
-        )
+        code = "df = pd.DataFrame({'a': [1, 2]})\nresult = len(df)"
         output, error = _execute(code, small_reg, small_logins)
         assert error is None
         assert output["result"] == 2

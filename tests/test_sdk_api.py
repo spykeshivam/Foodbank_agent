@@ -35,10 +35,10 @@ class TestProviders:
             assert "model" in cfg, f"{name} missing model"
 
     def test_groq_model(self):
-        assert PROVIDERS["Groq"]["model"] == "meta-llama/llama-4-maverick-17b-128e-instruct"
+        assert PROVIDERS["Groq"]["model"] == "llama-3.3-70b-versatile"
 
     def test_cerebras_model(self):
-        assert PROVIDERS["Cerebras"]["model"] == "openai/gpt-oss-120b"
+        assert PROVIDERS["Cerebras"]["model"] == "llama3.3-70b"
 
 
 # ── openai SDK attributes we use in agent.py ─────────────────────────────────
@@ -78,13 +78,13 @@ class TestBuildClient:
         monkeypatch.setenv("GROQ_API_KEY", "test-key")
         client, model = _build_client("Groq")
         assert isinstance(client, openai.OpenAI)
-        assert model == "meta-llama/llama-4-maverick-17b-128e-instruct"
+        assert model == "llama-3.3-70b-versatile"
 
     def test_cerebras_returns_client_and_model(self, monkeypatch):
         monkeypatch.setenv("CEREBRAS_API_KEY", "test-key")
         client, model = _build_client("Cerebras")
         assert isinstance(client, openai.OpenAI)
-        assert model == "openai/gpt-oss-120b"
+        assert model == "llama3.3-70b"
 
     def test_unknown_provider_raises(self):
         with pytest.raises(KeyError):
