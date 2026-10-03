@@ -25,7 +25,6 @@ import os
 import sys
 import time
 
-import openai
 import pandas as pd
 import pytest
 
@@ -54,23 +53,6 @@ pytestmark = pytest.mark.skipif(
 def _provider_available(provider: str) -> bool:
     key_env = PROVIDERS[provider]["api_key_env"]
     return bool(os.environ.get(key_env))
-
-
-def _run_query_or_skip(
-    query: str,
-    registrations: pd.DataFrame,
-    logins: pd.DataFrame,
-    provider: str,
-) -> AgentResponse:
-    """Run a query, converting model-not-found 404s into pytest skips.
-
-    A NotFoundError means the API key in CI doesn't have access to the
-    configured model — that's an environment problem, not a code bug.
-    """
-    try:
-        return run_query(query, registrations, logins, provider=provider)
-    except openai.NotFoundError as exc:
-        pytest.skip(f"{provider} model not accessible with current API key: {exc}")
 
 
 # ── Load real data once for the whole test session ────────────────────────────
@@ -140,7 +122,7 @@ class TestAgentQueries:
         self._skip_if_unavailable(provider)
         registrations, logins = real_data
         query = "How many people have Halal dietary requirements?"
-        result = _run_query_or_skip(query, registrations, logins, provider=provider)
+        result = run_query(query, registrations, logins, provider=provider)
         assert_valid_response(result, query)
         assert "halal" in result.text.lower(), f"Expected 'halal' in response, got: {result.text}"
 
@@ -149,7 +131,7 @@ class TestAgentQueries:
         self._skip_if_unavailable(provider)
         registrations, logins = real_data
         query = "Show me the gender breakdown of registered users as a pie chart."
-        result = _run_query_or_skip(query, registrations, logins, provider=provider)
+        result = run_query(query, registrations, logins, provider=provider)
         assert_valid_response(result, query)
         chart_blocks = [b for b in result.display_blocks if b["type"] == "chart"]
         assert len(chart_blocks) >= 1, "Expected at least one chart block"
@@ -161,7 +143,7 @@ class TestAgentQueries:
         self._skip_if_unavailable(provider)
         registrations, logins = real_data
         query = "How many logins were there each month? Show a bar chart."
-        result = _run_query_or_skip(query, registrations, logins, provider=provider)
+        result = run_query(query, registrations, logins, provider=provider)
         assert_valid_response(result, query)
         chart_blocks = [b for b in result.display_blocks if b["type"] == "chart"]
         assert len(chart_blocks) >= 1, "Expected a bar chart for monthly logins"
@@ -171,7 +153,7 @@ class TestAgentQueries:
         self._skip_if_unavailable(provider)
         registrations, logins = real_data
         query = "How many male users visited on a Tuesday?"
-        result = _run_query_or_skip(query, registrations, logins, provider=provider)
+        result = run_query(query, registrations, logins, provider=provider)
         assert_valid_response(result, query)
 
     def test_q5_language_breakdown_with_table(self, provider, real_data):
@@ -179,7 +161,7 @@ class TestAgentQueries:
         self._skip_if_unavailable(provider)
         registrations, logins = real_data
         query = "What are the top spoken languages among registered users? Show a chart."
-        result = _run_query_or_skip(query, registrations, logins, provider=provider)
+        result = run_query(query, registrations, logins, provider=provider)
         assert_valid_response(result, query)
         rich_blocks = [b for b in result.display_blocks if b["type"] in ("dataframe", "chart")]
         assert len(rich_blocks) >= 1, "Expected at least a table or chart for language breakdown"
