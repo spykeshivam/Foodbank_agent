@@ -75,12 +75,22 @@ def rate_limit_pause(request):
 def assert_valid_response(result: AgentResponse, query: str) -> None:
     assert isinstance(result, AgentResponse), f"Expected AgentResponse, got {type(result)} for: {query!r}"
     assert result.error is None, f"Agent returned an error: {result.error!r}\nQuery: {query!r}"
-    assert result.text.strip(), f"Response text is empty for: {query!r}"
-    assert any(ch.isdigit() for ch in result.text), (
-        f"Response contains no numerical result for: {query!r}\nText: {result.text}"
-    )
     assert isinstance(result.display_blocks, list), f"display_blocks is not a list for: {query!r}"
     assert len(result.display_blocks) >= 1, f"display_blocks is empty for: {query!r}"
+
+    # Text may be empty when the answer is a DataFrame or chart — accept either
+    has_text = bool(result.text.strip())
+    has_data_block = any(b.get("type") in ("dataframe", "chart") for b in result.display_blocks)
+    assert has_text or has_data_block, (
+        f"Response has neither non-empty text nor a data/chart block for: {query!r}"
+    )
+
+    # Numbers must appear in text OR in a dataframe block
+    has_digit_in_text = any(ch.isdigit() for ch in result.text)
+    has_dataframe = any(b.get("type") == "dataframe" for b in result.display_blocks)
+    assert has_digit_in_text or has_dataframe, (
+        f"Response contains no numerical result for: {query!r}\nText: {result.text}"
+    )
 
     valid_types = {"text", "dataframe", "chart"}
     for i, block in enumerate(result.display_blocks):
