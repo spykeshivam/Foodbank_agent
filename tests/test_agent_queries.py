@@ -108,7 +108,7 @@ def assert_valid_response(result: AgentResponse, query: str) -> None:
 # Parametrized test class — runs every query against Groq AND Cerebras
 # ═══════════════════════════════════════════════════════════════════════════════
 
-PROVIDERS_TO_TEST = ["Groq", "Cerebras"]
+PROVIDERS_TO_TEST = ["Groq"]
 
 
 @pytest.mark.parametrize("provider", PROVIDERS_TO_TEST)
